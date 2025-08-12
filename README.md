@@ -1,6 +1,15 @@
-# Livebet Calculator
+# Livebet calculator
 
-En responsiv, frontend-baserad webbapp för fotbollsbetting-prediktioner byggd med React, Tailwind CSS, Chart.js och Framer Motion.
+Publik demo: https://thille6.github.io/Livebet-calculator/
+
+Snabbstart lokalt:
+- Installera: `npm install`
+- Utvecklingsläge: `npm run dev` (öppnas på http://localhost:5173/)
+- Bygg: `npm run build`
+- Förhandsgranska build: `npm run preview`
+
+GitHub Pages (Project Pages) är konfigurerat via Vite base: `/Livebet-calculator/`.
+Om du ändrar repo-namn, uppdatera `vite.config.js` base accordingly.
 
 ## Funktioner
 

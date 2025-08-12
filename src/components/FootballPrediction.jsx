@@ -6,7 +6,6 @@ import { Pie, Bar } from 'react-chartjs-2';
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 const FootballPrediction = () => {
-  // State för formulärinmatning
   const [formData, setFormData] = useState({
     homeTeam: '',
     awayTeam: '',
@@ -14,92 +13,62 @@ const FootballPrediction = () => {
     awayPossession: 50,
     homeShotsOnTarget: 0,
     awayShotsOnTarget: 0,
-    homeShotsOffTarget: 0, // Nya fält för skott utanför mål
-    awayShotsOffTarget: 0, // Nya fält för skott utanför mål
+    homeShotsOffTarget: 0,
+    awayShotsOffTarget: 0,
     homeCorners: 0,
     awayCorners: 0,
     homeYellowCards: 0,
     awayYellowCards: 0,
     homeRedCards: 0,
     awayRedCards: 0,
-    homeGoals: 0,  // Fält för redan gjorda mål
-    awayGoals: 0,  // Fält för redan gjorda mål
+    homeGoals: 0,
+    awayGoals: 0,
     matchMinute: 0,
-    venue: 'home', // 'home' eller 'away'
-    modelMode: 'poisson' // 'poisson' or 'heuristic'
+    venue: 'home',
+    modelMode: 'poisson'
   });
 
-  // State för prediktionsresultat
   const [predictions, setPredictions] = useState(null);
-  
-  // State för historik
   const [history, setHistory] = useState([]);
-  
-  // State för modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalData, setModalData] = useState(null);
 
-  // Ladda historik från localStorage vid uppstart
   useEffect(() => {
-    const savedHistory = localStorage.getItem('predictionHistory');
+    const savedHistory = localStorage.getItem('footballPredictionHistory');
     if (savedHistory) {
       setHistory(JSON.parse(savedHistory));
     }
   }, []);
 
-  // Hantera formulärinmatning
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    let newValue = value;
     
-    // Konvertera numeriska värden
-    if (name !== 'homeTeam' && name !== 'awayTeam' && name !== 'venue') {
-      newValue = parseInt(value) || 0;
-      
-      // Validera bollinnehav
-      if (name === 'homePossession') {
-        const awayPossession = 100 - newValue;
-        setFormData(prev => ({
-          ...prev,
-          homePossession: Math.max(0, Math.min(100, newValue)),
-          awayPossession: Math.max(0, Math.min(100, awayPossession))
-        }));
-        return;
-      } else if (name === 'awayPossession') {
-        const homePossession = 100 - newValue;
-        setFormData(prev => ({
-          ...prev,
-          awayPossession: Math.max(0, Math.min(100, newValue)),
-          homePossession: Math.max(0, Math.min(100, homePossession))
-        }));
-        return;
-      }
-      
-      // Validera matchminut
-      if (name === 'matchMinute') {
-        newValue = Math.max(0, Math.min(120, newValue));
-      }
-      
-      // Validera negativa värden
-      if (name !== 'matchMinute') {
-        newValue = Math.max(0, newValue);
-      }
+    if (name === 'homePossession') {
+      setFormData(prev => ({
+        ...prev,
+        homePossession: parseInt(value) || 0,
+        awayPossession: 100 - (parseInt(value) || 0)
+      }));
+    } else if (name === 'awayPossession') {
+      setFormData(prev => ({
+        ...prev,
+        awayPossession: parseInt(value) || 0,
+        homePossession: 100 - (parseInt(value) || 0)
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: name.includes('Team') || name === 'venue' || name === 'modelMode' ? value : (parseInt(value) || 0)
+      }));
     }
-    
-    setFormData(prev => ({
-      ...prev,
-      [name]: newValue
-    }));
   };
 
-  // Beräkna Poisson-sannolikhet
   const poissonProbability = (lambda, k) => {
-    return Math.exp(-lambda) * Math.pow(lambda, k) / factorial(k);
+    return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
   };
 
-  // Hjälpfunktion för fakultet
   const factorial = (n) => {
-    if (n === 0 || n === 1) return 1;
+    if (n <= 1) return 1;
     let result = 1;
     for (let i = 2; i <= n; i++) {
       result *= i;
@@ -107,412 +76,194 @@ const FootballPrediction = () => {
     return result;
   };
 
-  // Generera prediktioner
   const generatePredictions = () => {
-    // Validera obligatoriska fält
-    if (!formData.homeTeam || !formData.awayTeam) {
-      alert('Lagnamn är obligatoriska!');
-      return;
+    const timeRemaining = (120 - formData.matchMinute) / 90;
+    const adjustmentFactor = Math.max(0.1, timeRemaining);
+    
+    let homeLambda = 1.4;
+    let awayLambda = 1.2;
+
+    if (formData.venue === 'home') {
+      homeLambda *= 1.1;
+    } else {
+      awayLambda *= 1.1;
     }
 
-    // Beräkna matchutfall (1X2)
-    const homePossessionWeight = 0.4;
-    const shotsWeight = 0.3;
-    const cornersWeight = 0.2;
-    const cardsWeight = -0.1;
-    const homeAdvantage = formData.venue === 'home' ? 0.1 : 0;
-    const lateGameDrawBonus = formData.matchMinute > 80 ? 0.05 : 0;
+    const homeAttackStrength = (formData.homeShotsOnTarget + formData.homeShotsOffTarget * 0.3) * 0.15 +
+                               formData.homeCorners * 0.05 +
+                               (formData.homePossession / 100) * 0.5;
+    
+    const awayAttackStrength = (formData.awayShotsOnTarget + formData.awayShotsOffTarget * 0.3) * 0.15 +
+                               formData.awayCorners * 0.05 +
+                               (formData.awayPossession / 100) * 0.5;
 
-    // Beräkna totalvärden för varje lag
-    const homeTotalCards = formData.homeYellowCards + formData.homeRedCards * 2;
-    const awayTotalCards = formData.awayYellowCards + formData.awayRedCards * 2;
-    
-    // Beräkna normaliserade värden för varje faktor
-    const possessionFactor = (formData.homePossession / 100) * homePossessionWeight;
-    
-    // Inkludera både skott på mål och utanför mål, men med olika vikt
-    const homeTotalShots = formData.homeShotsOnTarget + formData.homeShotsOffTarget * 0.5;
-    const awayTotalShots = formData.awayShotsOnTarget + formData.awayShotsOffTarget * 0.5;
-    const totalShots = homeTotalShots + awayTotalShots;
-    
-    const shotsFactor = totalShots > 0 
-      ? (homeTotalShots / totalShots) * shotsWeight 
-      : shotsWeight / 2;
-    
-    const totalCorners = formData.homeCorners + formData.awayCorners;
-    const cornersFactor = totalCorners > 0 
-      ? (formData.homeCorners / totalCorners) * cornersWeight 
-      : cornersWeight / 2;
-    
-    const totalCards = homeTotalCards + awayTotalCards;
-    const cardsFactor = totalCards > 0 
-      ? (1 - (homeTotalCards / totalCards)) * cardsWeight 
-      : 0;
+    homeLambda += homeAttackStrength;
+    awayLambda += awayAttackStrength;
 
-    // Beräkna lambda-värden först för Poisson-fördelning (förbättrade vikter)
-    const homeAttacks = (
-      formData.homeShotsOnTarget * 1.0 +
-      formData.homeShotsOffTarget * 0.35 +
-      formData.homeCorners * 0.15 +
-      (formData.venue === 'home' ? 0.2 : 0)
-    );
-    const awayAttacks = (
-      formData.awayShotsOnTarget * 1.0 +
-      formData.awayShotsOffTarget * 0.35 +
-      formData.awayCorners * 0.15 +
-      (formData.venue === 'away' ? 0.0 : 0) // bortaplan ger ingen bonus
-    );
-    
-    // Justera för kort (negativ påverkan på anfallseffektivitet)
-    const homeCardsPenalty = formData.homeYellowCards * 0.08 + formData.homeRedCards * 0.4;
-    const awayCardsPenalty = formData.awayYellowCards * 0.08 + formData.awayRedCards * 0.4;
-
-    // Multiplikativ dämpning vid rött kort
-    const homeRedFactor = formData.homeRedCards > 0 ? 0.8 : 1.0;
-    const awayRedFactor = formData.awayRedCards > 0 ? 0.8 : 1.0;
-
-    // Tidsfaktor (skala med kvarvarande minuter, max 120 för förlängning)
-    const minutesLeft = Math.max(0, 90 - formData.matchMinute);
-    const timeFactor = Math.max(0.15, Math.min(1, minutesLeft / 90));
-
-    // Lambda-värden för Poisson (förväntade mål) med skalningsfaktor och clamp
-    const scale = 0.40;
-    const rawHomeLambda = Math.max(0, (homeAttacks - homeCardsPenalty)) * scale * timeFactor * homeRedFactor;
-    const rawAwayLambda = Math.max(0, (awayAttacks - awayCardsPenalty)) * scale * timeFactor * awayRedFactor;
-    const homeLambda = Math.max(0.15, Math.min(2.2, rawHomeLambda));
-    const awayLambda = Math.max(0.15, Math.min(2.2, rawAwayLambda));
-    
-    console.log('=== POISSON-BASERAD 1X2 BERÄKNING ===');
-    console.log('Lambda-värden:', { 
-      homeAttacks, 
-      awayAttacks, 
-      homeLambda, 
-      awayLambda 
-    });
-
-
-    
-    // Räkna fram 1X2 direkt från Poisson genom att summera sannolikheter för exakta resultat
-    // Vi beaktar nuvarande ställning genom att endast räkna återstående mål (prognos från nu)
-    const startHome = formData.homeGoals;
-    const startAway = formData.awayGoals;
-    
-    let homeWinProb = 0;
-    let drawProb = 0;
-    let awayWinProb = 0;
-    
-    // Adaptivt spann för återstående mål för att täcka ~99.9% av massan
-    const coverage = 0.999;
-    const calcMaxK = (lambda) => {
-      let cum = 0;
-      let k = 0;
-      while (cum < coverage && k < 15) {
-        cum += poissonProbability(lambda, k);
-        k++;
-      }
-      return Math.max(6, k); // minst 6, annars dynamiskt baserat på lambda
-    };
-    const maxH = calcMaxK(homeLambda);
-    const maxA = calcMaxK(awayLambda);
-
-    for (let h = 0; h <= maxH; h++) {
-      const pH = poissonProbability(homeLambda, h);
-      for (let a = 0; a <= maxA; a++) {
-        const pA = poissonProbability(awayLambda, a);
-        const prob = pH * pA;
-        const finalHome = startHome + h;
-        const finalAway = startAway + a;
-        if (finalHome > finalAway) homeWinProb += prob;
-        else if (finalHome === finalAway) drawProb += prob;
-        else awayWinProb += prob;
-      }
+    if (formData.homeRedCards > 0) {
+      homeLambda *= Math.pow(0.8, formData.homeRedCards);
     }
-    
-    // Bonus för oavgjort sent i matchen (små justeringar, normaliseras efteråt)
-    if (formData.matchMinute > 80) {
-      drawProb *= 1.05;
+    if (formData.awayRedCards > 0) {
+      awayLambda *= Math.pow(0.8, formData.awayRedCards);
     }
-    
-    // Normalisera
-    const sum1x2 = homeWinProb + drawProb + awayWinProb;
-    homeWinProb /= sum1x2;
-    drawProb /= sum1x2;
-    awayWinProb /= sum1x2;
-    
-    console.log('Poisson 1X2:', { homeWinProb, drawProb, awayWinProb, sum: homeWinProb + drawProb + awayWinProb });
-    
-    // Beräkna sannolikheter för antal mål
+
+    homeLambda *= adjustmentFactor;
+    awayLambda *= adjustmentFactor;
+
     const homeGoalProbs = [];
     const awayGoalProbs = [];
     const totalGoalProbs = [];
-    
+
     for (let i = 0; i <= 4; i++) {
-      // Sannolikhet för exakt i mål
-      homeGoalProbs[i] = poissonProbability(homeLambda, i);
-      awayGoalProbs[i] = poissonProbability(awayLambda, i);
-      
-      // Sannolikhet för totalt i mål (konvolution av hemma- och bortamål)
+      homeGoalProbs.push(i === 4 ? 
+        1 - homeGoalProbs.reduce((sum, prob) => sum + prob, 0) : 
+        poissonProbability(homeLambda, i)
+      );
+      awayGoalProbs.push(i === 4 ? 
+        1 - awayGoalProbs.reduce((sum, prob) => sum + prob, 0) : 
+        poissonProbability(awayLambda, i)
+      );
+    }
+
+    for (let i = 0; i <= 4; i++) {
       let totalProb = 0;
-      for (let j = 0; j <= i; j++) {
-        totalProb += poissonProbability(homeLambda, j) * poissonProbability(awayLambda, i - j);
+      for (let h = 0; h <= 4; h++) {
+        for (let a = 0; a <= 4; a++) {
+          if (h + a === i) {
+            totalProb += homeGoalProbs[h] * awayGoalProbs[a];
+          }
+        }
       }
-      totalGoalProbs[i] = totalProb;
+      totalGoalProbs.push(totalProb);
     }
-    
-    // Sannolikhet för 4+ mål
-    homeGoalProbs[4] = 1 - homeGoalProbs.slice(0, 4).reduce((a, b) => a + b, 0);
-    awayGoalProbs[4] = 1 - awayGoalProbs.slice(0, 4).reduce((a, b) => a + b, 0);
-    totalGoalProbs[4] = 1 - totalGoalProbs.slice(0, 4).reduce((a, b) => a + b, 0);
 
-    // Beräkna över/under-marknader
-    const overUnderGoals = {
-      over: 1 - (totalGoalProbs[0] + totalGoalProbs[1] + totalGoalProbs[2] * 0.5),
-      under: totalGoalProbs[0] + totalGoalProbs[1] + totalGoalProbs[2] * 0.5
-    };
-    
-    const totalCornerExpectation = formData.homeCorners + formData.awayCorners + 
-      (formData.homeShotsOnTarget + formData.awayShotsOnTarget) * 0.2 * (1 - formData.matchMinute / 120) +
-      (formData.homeShotsOffTarget + formData.awayShotsOffTarget) * 0.1 * (1 - formData.matchMinute / 120);
-    
-    const overUnderCorners = {
-      over: totalCornerExpectation > 8.5 ? 0.6 : 0.4,
-      under: totalCornerExpectation <= 8.5 ? 0.6 : 0.4
-    };
-    
-    const totalCardExpectation = homeTotalCards + awayTotalCards + 
-      (formData.matchMinute / 120) * 2;
-    
-    const overUnderCards = {
-      over: totalCardExpectation > 4.5 ? 0.6 : 0.4,
-      under: totalCardExpectation <= 4.5 ? 0.6 : 0.4
-    };
+    let homeWin = 0;
+    let draw = 0;
+    let awayWin = 0;
 
-    // Beräkna specifika resultat med hänsyn till redan gjorda mål
+    for (let h = 0; h <= 4; h++) {
+      for (let a = 0; a <= 4; a++) {
+        const prob = homeGoalProbs[h] * awayGoalProbs[a];
+        const adjustedHomeGoals = h + formData.homeGoals;
+        const adjustedAwayGoals = a + formData.awayGoals;
+        
+        if (adjustedHomeGoals > adjustedAwayGoals) {
+          homeWin += prob;
+        } else if (adjustedHomeGoals === adjustedAwayGoals) {
+          draw += prob;
+        } else {
+          awayWin += prob;
+        }
+      }
+    }
+
+    const total = homeWin + draw + awayWin;
+    homeWin /= total;
+    draw /= total;
+    awayWin /= total;
+
     const specificResults = [];
-    console.log('Beräkning av specifika resultat:');
-    for (let home = 0; home <= 3; home++) {
-      for (let away = 0; away <= 3; away++) {
-        const homePoisson = poissonProbability(homeLambda, home);
-        const awayPoisson = poissonProbability(awayLambda, away);
-        const resultProb = homePoisson * awayPoisson;
-        
-        console.log(`Resultat ${formData.homeGoals + home}-${formData.awayGoals + away}:`, { 
-          homePoisson, 
-          awayPoisson, 
-          resultProb 
-        });
-        
+    for (let h = 0; h <= 3; h++) {
+      for (let a = 0; a <= 3; a++) {
+        const prob = homeGoalProbs[h] * awayGoalProbs[a];
         specificResults.push({
-          result: `${formData.homeTeam} ${formData.homeGoals + home} - ${formData.awayTeam} ${formData.awayGoals + away}`,
-          probability: resultProb,
-          homeGoals: formData.homeGoals + home,
-          awayGoals: formData.awayGoals + away
+          result: `${h + formData.homeGoals}-${a + formData.awayGoals}`,
+          probability: prob,
+          homeGoals: h + formData.homeGoals,
+          awayGoals: a + formData.awayGoals
         });
       }
     }
-    
-    // Sortera och ta de 5 mest sannolika resultaten
+
     specificResults.sort((a, b) => b.probability - a.probability);
-    const top5Results = specificResults.slice(0, 5);
 
-    // Beräkna första målgörare (lag) eller nästa målgörare om det redan finns mål
-    let homeFirstGoalProb, awayFirstGoalProb, noGoalProb;
-    
-    console.log('Beräkning av första/nästa målgörare:');
-    
-    if (formData.homeGoals === 0 && formData.awayGoals === 0) {
-      // Inga mål gjorda än - beräkna första målgörare
-      const totalLambda = homeLambda + awayLambda;
-      const noGoalRaw = Math.exp(-totalLambda);
-      const goalScoredProb = 1 - noGoalRaw;
-      
-      homeFirstGoalProb = homeLambda / totalLambda * goalScoredProb;
-      awayFirstGoalProb = awayLambda / totalLambda * goalScoredProb;
-      noGoalProb = noGoalRaw;
-      
-      console.log('Första målgörare (inga mål gjorda):', { 
-        totalLambda,
-        goalScoredProb,
-        noGoalRaw,
-        hemmaRatio: homeLambda / totalLambda,
-        bortaRatio: awayLambda / totalLambda,
-        hemma: homeFirstGoalProb, 
-        borta: awayFirstGoalProb, 
-        ingaMål: noGoalProb 
-      });
-    } else {
-      // Mål redan gjorda - beräkna nästa målgörare
-      const totalLambda = homeLambda + awayLambda;
-      const noGoalRaw = Math.exp(-totalLambda);
-      homeFirstGoalProb = (homeLambda / totalLambda) * (1 - noGoalRaw);
-      awayFirstGoalProb = (awayLambda / totalLambda) * (1 - noGoalRaw);
-      noGoalProb = noGoalRaw;
-      
-      console.log('Nästa målgörare (mål redan gjorda):', { 
-        totalLambda,
-        hemmaRatio: homeLambda / totalLambda,
-        bortaRatio: awayLambda / totalLambda,
-        hemmaFöreNormalisering: homeFirstGoalProb, 
-        bortaFöreNormalisering: awayFirstGoalProb, 
-        ingaMålFöreNormalisering: noGoalProb 
-      });
-      
-      // Normalisering inte nödvändig: komponenter summerar redan till 1
-      
-      console.log('Efter normalisering:', { 
-        hemma: homeFirstGoalProb, 
-        borta: awayFirstGoalProb, 
-        ingaMer: noGoalProb 
-      });
-    }
+    const over25Goals = totalGoalProbs[3] + totalGoalProbs[4];
+    const under25Goals = 1 - over25Goals;
 
-    // Generera betting-tips
+    const totalCorners = formData.homeCorners + formData.awayCorners;
+    const remainingCornerRate = Math.max(2, 8 - totalCorners) * adjustmentFactor;
+    const over85Corners = remainingCornerRate > 1.5 ? 0.6 : 0.35;
+
+    const totalCards = formData.homeYellowCards + formData.awayYellowCards + 
+                      (formData.homeRedCards + formData.awayRedCards) * 2;
+    const over45Cards = totalCards > 2 ? 0.7 : 0.4;
+
+    const firstGoalHome = homeLambda / (homeLambda + awayLambda + 0.2);
+    const firstGoalAway = awayLambda / (homeLambda + awayLambda + 0.2);
+    const noMoreGoals = 0.2 / (homeLambda + awayLambda + 0.2);
+
     const bettingTips = [];
-    // Kontrollera att lagnamn är angivna, annars använd generiska namn
-    const homeTeamName = formData.homeTeam.trim() || 'Hemmalag';
-    const awayTeamName = formData.awayTeam.trim() || 'Bortalag';
-    
-    if (homeWinProb > 0.6) bettingTips.push(`${homeTeamName} vinst (${(homeWinProb * 100).toFixed(1)}%)`);
-    if (awayWinProb > 0.6) bettingTips.push(`${awayTeamName} vinst (${(awayWinProb * 100).toFixed(1)}%)`);
-    if (drawProb > 0.3) bettingTips.push(`Oavgjort (${(drawProb * 100).toFixed(1)}%)`);
-    if (overUnderGoals.over > 0.7) bettingTips.push(`Över 2.5 mål (${(overUnderGoals.over * 100).toFixed(1)}%)`);
-    if (overUnderGoals.under > 0.7) bettingTips.push(`Under 2.5 mål (${(overUnderGoals.under * 100).toFixed(1)}%)`);
-    if (overUnderCorners.over > 0.7) bettingTips.push(`Över 8.5 hörnor (${(overUnderCorners.over * 100).toFixed(1)}%)`);
-    if (overUnderCorners.under > 0.7) bettingTips.push(`Under 8.5 hörnor (${(overUnderCorners.under * 100).toFixed(1)}%)`);
-    if (overUnderCards.over > 0.7) bettingTips.push(`Över 4.5 kort (${(overUnderCards.over * 100).toFixed(1)}%)`);
-    if (overUnderCards.under > 0.7) bettingTips.push(`Under 4.5 kort (${(overUnderCards.under * 100).toFixed(1)}%)`);
-    
-    // Lägg till specifika resultat med hög sannolikhet
-    top5Results.forEach(result => {
-      if (result.probability > 0.05) {
-        bettingTips.push(`Resultat ${result.result} (${(result.probability * 100).toFixed(1)}%)`);
-      }
-    });
-    
-    // Anpassa texten baserat på om det redan finns mål i matchen
-    if (formData.homeGoals === 0 && formData.awayGoals === 0) {
-      if (homeFirstGoalProb > 0.6) bettingTips.push(`${homeTeamName} gör första målet (${(homeFirstGoalProb * 100).toFixed(1)}%)`);
-      if (awayFirstGoalProb > 0.6) bettingTips.push(`${awayTeamName} gör första målet (${(awayFirstGoalProb * 100).toFixed(1)}%)`);
-    } else {
-      if (homeFirstGoalProb > 0.6) bettingTips.push(`${homeTeamName} gör nästa mål (${(homeFirstGoalProb * 100).toFixed(1)}%)`);
-      if (awayFirstGoalProb > 0.6) bettingTips.push(`${awayTeamName} gör nästa mål (${(awayFirstGoalProb * 100).toFixed(1)}%)`);
-      if (noGoalProb > 0.3) bettingTips.push(`Inga fler mål (${(noGoalProb * 100).toFixed(1)}%)`);
+    if (over25Goals > 0.6) {
+      bettingTips.push("Över 2.5 mål ser troligt ut");
+    }
+    if (homeWin > 0.5) {
+      bettingTips.push(`${formData.homeTeam} har god chans att vinna`);
+    }
+    if (draw > 0.35) {
+      bettingTips.push("Oavgjort är ett starkt alternativ");
     }
 
-    // Logga inmatade värden och beräkningsresultat för felsökning
-    console.log('=== INMATADE VÄRDEN ===');
-    console.log('Lagnamn:', { hemmalag: homeTeamName, bortalag: awayTeamName });
-    console.log('Statistik:', { 
-      possession: { hemma: formData.homePossession, borta: formData.awayPossession },
-      shotsOnTarget: { hemma: formData.homeShotsOnTarget, borta: formData.awayShotsOnTarget },
-      shotsOffTarget: { hemma: formData.homeShotsOffTarget, borta: formData.awayShotsOffTarget },
-      corners: { hemma: formData.homeCorners, borta: formData.awayCorners },
-      cards: { 
-        hemmaGula: formData.homeYellowCards, 
-        hemmaRöda: formData.homeRedCards,
-        bortaGula: formData.awayYellowCards, 
-        bortaRöda: formData.awayRedCards 
-      },
-      goals: { hemma: formData.homeGoals, borta: formData.awayGoals },
-      matchMinute: formData.matchMinute,
-      venue: formData.venue
-    });
-    
-    console.log('=== BERÄKNINGSRESULTAT ===');
-    console.log('Matchutfall:', { 
-      hemmavinst: homeWinProb, 
-      oavgjort: drawProb, 
-      bortavinst: awayWinProb 
-    });
-    console.log('Lambda-värden:', { hemma: homeLambda, borta: awayLambda });
-    console.log('Förväntade mål:', { 
-      hemma: homeGoalProbs, 
-      borta: awayGoalProbs, 
-      totalt: totalGoalProbs 
-    });
-    console.log('Över/Under:', { 
-      mål: overUnderGoals, 
-      hörnor: overUnderCorners, 
-      kort: overUnderCards 
-    });
-    console.log('Topp 5 resultat:', top5Results);
-    console.log('Första/nästa målgörare:', { 
-      hemma: homeFirstGoalProb, 
-      borta: awayFirstGoalProb, 
-      ingaMer: noGoalProb 
-    });
-    console.log('Betting-tips:', bettingTips);
-    
-    // Samla alla prediktioner
-    const newPrediction = {
-      id: Date.now(),
-      timestamp: new Date().toLocaleString(),
+    const result = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       formData: { ...formData },
       results: {
-        matchOutcome: { homeWin: homeWinProb, draw: drawProb, awayWin: awayWinProb },
+        matchOutcome: { homeWin, draw, awayWin },
         expectedGoals: {
           home: homeGoalProbs,
           away: awayGoalProbs,
           total: totalGoalProbs
         },
         overUnder: {
-          goals: overUnderGoals,
-          corners: overUnderCorners,
-          cards: overUnderCards
+          goals: { over: over25Goals, under: under25Goals },
+          corners: { over: over85Corners, under: 1 - over85Corners },
+          cards: { over: over45Cards, under: 1 - over45Cards }
         },
-        specificResults: top5Results,
         firstGoalScorer: {
-          home: homeFirstGoalProb,
-          away: awayFirstGoalProb,
-          none: noGoalProb
+          home: firstGoalHome,
+          away: firstGoalAway,
+          none: noMoreGoals
         },
+        specificResults: specificResults.slice(0, 5),
         bettingTips
-      }
+      },
+      timestamp: new Date().toLocaleString('sv-SE')
     };
 
-    // Uppdatera state med nya prediktioner
-    setPredictions(newPrediction);
+    setPredictions(result);
 
-    // Uppdatera historik
-    const updatedHistory = [newPrediction, ...history].slice(0, 5);
-    setHistory(updatedHistory);
-    localStorage.setItem('predictionHistory', JSON.stringify(updatedHistory));
+    const newHistory = [result, ...history.slice(0, 9)];
+    setHistory(newHistory);
+    localStorage.setItem('footballPredictionHistory', JSON.stringify(newHistory));
   };
 
-  // Öppna modal med detaljerad information
   const openModal = (result) => {
     setModalData(result);
     setModalOpen(true);
   };
 
-  // Stäng modal
   const closeModal = () => {
     setModalOpen(false);
     setModalData(null);
   };
 
-  // Radera historik
   const clearHistory = () => {
     setHistory([]);
-    localStorage.removeItem('predictionHistory');
+    localStorage.removeItem('footballPredictionHistory');
   };
 
-  // Exportera prediktioner som JSON
   const exportPredictions = () => {
-    if (!predictions) return;
-    
-    const dataStr = JSON.stringify(predictions, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
-    
-    const exportFileDefaultName = `football-prediction-${formData.homeTeam}-vs-${formData.awayTeam}.json`;
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
+    if (predictions) {
+      const dataStr = JSON.stringify(predictions, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      const exportFileDefaultName = `predictions_${formData.homeTeam}_vs_${formData.awayTeam}_${Date.now()}.json`;
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+    }
   };
 
-  // Ladda historisk prediktion
   const loadPrediction = (prediction) => {
     setFormData(prediction.formData);
     setPredictions(prediction);
@@ -526,313 +277,302 @@ const FootballPrediction = () => {
     >
       <h1 className="text-3xl font-bold mb-6">Livebet Calculator</h1>
       
-      {/* Inmatningsformulär */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full mb-8"
-      >
-        <h2 className="text-xl font-semibold mb-4">Matchdata</h2>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* Lagnamn */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag</label>
-            <input 
-              type="text" 
-              name="homeTeam" 
-              value={formData.homeTeam} 
-              onChange={handleInputChange} 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-              placeholder="t.ex. Man United"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag</label>
-            <input 
-              type="text" 
-              name="awayTeam" 
-              value={formData.awayTeam} 
-              onChange={handleInputChange} 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-              placeholder="t.ex. Arsenal"
-            />
-          </div>
-          
-          {/* Bollinnehav */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag bollinnehav (%)</label>
-            <input 
-              type="number" 
-              name="homePossession" 
-              value={formData.homePossession} 
-              onChange={handleInputChange} 
-              min="0" 
-              max="100" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag bollinnehav (%)</label>
-            <input 
-              type="number" 
-              name="awayPossession" 
-              value={formData.awayPossession} 
-              onChange={handleInputChange} 
-              min="0" 
-              max="100" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Skott på mål */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag skott på mål</label>
-            <input 
-              type="number" 
-              name="homeShotsOnTarget" 
-              value={formData.homeShotsOnTarget} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag skott på mål</label>
-            <input 
-              type="number" 
-              name="awayShotsOnTarget" 
-              value={formData.awayShotsOnTarget} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Skott utanför mål */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag skott utanför mål</label>
-            <input 
-              type="number" 
-              name="homeShotsOffTarget" 
-              value={formData.homeShotsOffTarget} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag skott utanför mål</label>
-            <input 
-              type="number" 
-              name="awayShotsOffTarget" 
-              value={formData.awayShotsOffTarget} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Hörnor */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag hörnor</label>
-            <input 
-              type="number" 
-              name="homeCorners" 
-              value={formData.homeCorners} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag hörnor</label>
-            <input 
-              type="number" 
-              name="awayCorners" 
-              value={formData.awayCorners} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Redan gjorda mål */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag mål</label>
-            <input 
-              type="number" 
-              name="homeGoals" 
-              value={formData.homeGoals} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag mål</label>
-            <input 
-              type="number" 
-              name="awayGoals" 
-              value={formData.awayGoals} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Gula kort */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag gula kort</label>
-            <input 
-              type="number" 
-              name="homeYellowCards" 
-              value={formData.homeYellowCards} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag gula kort</label>
-            <input 
-              type="number" 
-              name="awayYellowCards" 
-              value={formData.awayYellowCards} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Röda kort */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Hemmalag röda kort</label>
-            <input 
-              type="number" 
-              name="homeRedCards" 
-              value={formData.homeRedCards} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium mb-1">Bortalag röda kort</label>
-            <input 
-              type="number" 
-              name="awayRedCards" 
-              value={formData.awayRedCards} 
-              onChange={handleInputChange} 
-              min="0" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Matchminut */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Matchminut (0-120)</label>
-            <input 
-              type="number" 
-              name="matchMinute" 
-              value={formData.matchMinute} 
-              onChange={handleInputChange} 
-              min="0" 
-              max="120" 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          
-          {/* Hemma/borta-status */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Spelplats</label>
-            <select 
-              name="venue" 
-              value={formData.venue} 
-              onChange={handleInputChange} 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            >
-              <option value="home">Hemmaplan</option>
-              <option value="away">Bortaplan</option>
-            </select>
-          </div>
-
-          {/* Modell-läge */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Modell-läge</label>
-            <select 
-              name="modelMode" 
-              value={formData.modelMode} 
-              onChange={handleInputChange} 
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            >
-              <option value="poisson">Poisson</option>
-              <option value="heuristic">Heuristik</option>
-            </select>
-          </div>
-        </div>
-        
-        <button 
-          onClick={generatePredictions} 
-          className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded mt-6 transition-transform hover:scale-105 active:scale-95"
+      {/* Inmatningsformulär + Generella scenarier */}
+      <div className="w-full max-w-7xl flex flex-col xl:flex-row gap-6 mb-8">
+        {/* Inmatningsformulär */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full"
         >
-          Generera prediktioner
-        </button>
-      </motion.div>
-      
-      {/* Tolkningsguide */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full mb-8"
-      >
-        <h2 className="text-xl font-semibold mb-4">Kort tolkningsguide</h2>
-        <div className="space-y-4 text-sm text-gray-200">
-          <div>
-            <h3 className="font-medium text-white">1) Tidigt rött kort (0–30’)</h3>
-            <ul className="list-disc list-inside">
-              <li>Lag med rött: deras lambda ska ned ~15–30%; motståndaren kan stiga något.</li>
-              <li>1X2: favoritskifte eller tydlig försvagning för laget med rött.</li>
-              <li>Nästa mål: gynnar laget utan rött; “inga mer mål” beror främst på total lambda och tid.</li>
-            </ul>
+          <h2 className="text-xl font-semibold mb-4">Matchdata</h2>
+        
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Lagnamn */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag</label>
+              <input 
+                type="text" 
+                name="homeTeam" 
+                value={formData.homeTeam} 
+                onChange={handleInputChange} 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+                placeholder="t.ex. Man United"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag</label>
+              <input 
+                type="text" 
+                name="awayTeam" 
+                value={formData.awayTeam} 
+                onChange={handleInputChange} 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+                placeholder="t.ex. Arsenal"
+              />
+            </div>
+            
+            {/* Bollinnehav */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag bollinnehav (%)</label>
+              <input 
+                type="number" 
+                name="homePossession" 
+                value={formData.homePossession} 
+                onChange={handleInputChange} 
+                min="0" 
+                max="100" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag bollinnehav (%)</label>
+              <input 
+                type="number" 
+                name="awayPossession" 
+                value={formData.awayPossession} 
+                onChange={handleInputChange} 
+                min="0" 
+                max="100" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Skott på mål */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag skott på mål</label>
+              <input 
+                type="number" 
+                name="homeShotsOnTarget" 
+                value={formData.homeShotsOnTarget} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag skott på mål</label>
+              <input 
+                type="number" 
+                name="awayShotsOnTarget" 
+                value={formData.awayShotsOnTarget} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Skott utanför mål */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag skott utanför mål</label>
+              <input 
+                type="number" 
+                name="homeShotsOffTarget" 
+                value={formData.homeShotsOffTarget} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag skott utanför mål</label>
+              <input 
+                type="number" 
+                name="awayShotsOffTarget" 
+                value={formData.awayShotsOffTarget} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Hörnor */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag hörnor</label>
+              <input 
+                type="number" 
+                name="homeCorners" 
+                value={formData.homeCorners} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag hörnor</label>
+              <input 
+                type="number" 
+                name="awayCorners" 
+                value={formData.awayCorners} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Redan gjorda mål */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag mål</label>
+              <input 
+                type="number" 
+                name="homeGoals" 
+                value={formData.homeGoals} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag mål</label>
+              <input 
+                type="number" 
+                name="awayGoals" 
+                value={formData.awayGoals} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Gula kort */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag gula kort</label>
+              <input 
+                type="number" 
+                name="homeYellowCards" 
+                value={formData.homeYellowCards} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag gula kort</label>
+              <input 
+                type="number" 
+                name="awayYellowCards" 
+                value={formData.awayYellowCards} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Röda kort */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Hemmalag röda kort</label>
+              <input 
+                type="number" 
+                name="homeRedCards" 
+                value={formData.homeRedCards} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Bortalag röda kort</label>
+              <input 
+                type="number" 
+                name="awayRedCards" 
+                value={formData.awayRedCards} 
+                onChange={handleInputChange} 
+                min="0" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Matchminut */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Matchminut (0-120)</label>
+              <input 
+                type="number" 
+                name="matchMinute" 
+                value={formData.matchMinute} 
+                onChange={handleInputChange} 
+                min="0" 
+                max="120" 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              />
+            </div>
+            
+            {/* Hemma/borta-status */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Spelplats</label>
+              <select 
+                name="venue" 
+                value={formData.venue} 
+                onChange={handleInputChange} 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              >
+                <option value="home">Hemmaplan</option>
+                <option value="away">Bortaplan</option>
+              </select>
+            </div>
+
+            {/* Modell-läge */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Modell-läge</label>
+              <select 
+                name="modelMode" 
+                value={formData.modelMode} 
+                onChange={handleInputChange} 
+                className="w-full bg-gray-700 rounded p-2 text-white"
+              >
+                <option value="poisson">Poisson</option>
+                <option value="heuristic">Heuristik</option>
+              </select>
+            </div>
           </div>
-          <div>
-            <h3 className="font-medium text-white">2) Sen 1–1 (80’+)</h3>
-            <ul className="list-disc list-inside">
-              <li>Oavgjort bör vara förhöjt (ofta 40–55% beroende på tempo).</li>
-              <li>“Inga mer mål” ≈ exp(-totalLambda); kan vara betydande om tempot sjunkit.</li>
-              <li>Toppresultat: 1–1 dominerar; 2–1/1–2 som nästa alternativ.</li>
-            </ul>
+          
+          <button 
+            onClick={generatePredictions} 
+            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded mt-6 transition-transform hover:scale-105 active:scale-95"
+          >
+            Generera prediktioner
+          </button>
+        </motion.div>
+        
+        {/* Generella scenarier */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full"
+        >
+          <h2 className="text-xl font-semibold mb-4">Fördelaktiga scenarier</h2>
+          <div className="space-y-4">
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-green-400 mb-2">Över 2.5 mål</h3>
+              <p className="text-sm text-gray-300">Båda lagen har hög offensiv kapacitet och svag defensiv. Tidig målproduktion tyder på öppet spel.</p>
+            </div>
+            
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-blue-400 mb-2">Båda lagen gör mål</h3>
+              <p className="text-sm text-gray-300">Jämn match med bra anfallsspel från båda sidor. Inga extrema defensive strukturer.</p>
+            </div>
+            
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-yellow-400 mb-2">Under 2.5 mål</h3>
+              <p className="text-sm text-gray-300">Lågt tempo, stark defensiv från båda lag eller tidigt ledande lag som låser matchen.</p>
+            </div>
+            
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-purple-400 mb-2">Oavgjort</h3>
+              <p className="text-sm text-gray-300">Jämna styrkeförhållanden, defensivt spel eller sen utjämning som begränsar tiden för fler mål.</p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-medium text-white">3) Tidig dominans utan mål (0–30’)</h3>
-            <ul className="list-disc list-inside">
-              <li>Hög SOT/hörnor för ett lag → högre lambda för det laget.</li>
-              <li>1X2: moderat fördel (t.ex. 45–60%) till det dominerande laget.</li>
-              <li>Nästa mål: lutar 55–70% mot det dominerande laget; “inga mer mål” relativt låg tidigt.</li>
-            </ul>
-          </div>
-          <div>
-            <h3 className="font-medium text-white">4) Målrik första halva</h3>
-            <ul className="list-disc list-inside">
-              <li>TotalLambda för återstoden bör vara måttlig (tempo avtar ofta efter paus).</li>
-              <li>1X2: nära 50–50 om ställningen är jämn; annars följer favorit laget med övertag.</li>
-              <li>Nästa mål: nära lambda-fördelning; “inga mer mål” styrs av återstående tid/tempo.</li>
-            </ul>
-          </div>
-          <p className="text-gray-300">Snabbkoll: 1X2 ska summera till 1.0, “inga mer mål” ≈ exp(-(homeLambda+awayLambda)), och toppresultaten ska vara konsistenta med 1X2 och matchminut.</p>
-        </div>
-      </motion.div>
+        </motion.div>
+      </div>
       
       {/* Resultatsektion */}
       {predictions && (
@@ -1016,7 +756,7 @@ const FootballPrediction = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {predictions.results.specificResults.map((result, index) => (
                 <motion.button
-                  key={index}
+                  key={result.result}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   className="bg-gray-700 p-3 rounded text-center hover:bg-gray-600 transition-colors"
@@ -1034,7 +774,7 @@ const FootballPrediction = () => {
             {predictions.results.bettingTips.length > 0 ? (
               <ul className="list-disc pl-5 space-y-1">
                 {predictions.results.bettingTips.map((tip, index) => (
-                  <li key={index}>{tip}</li>
+                  <li key={`${tip}-${index}`}>{tip}</li>
                 ))}
               </ul>
             ) : (
@@ -1074,7 +814,7 @@ const FootballPrediction = () => {
           <div className="space-y-3">
             {history.map((item, index) => (
               <motion.div 
-                key={item.id}
+                key={item.id || `${item.formData?.homeTeam}-${item.formData?.awayTeam}-${item.timestamp}-${index}`}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ duration: 0.3, delay: index * 0.1 }}
