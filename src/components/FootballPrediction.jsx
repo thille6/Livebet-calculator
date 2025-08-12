@@ -829,6 +829,11 @@ const FootballPrediction = () => {
         </motion.div>
       )}
       
+      {/* Versionsstämpel */}
+      <div className="text-center text-xs text-gray-500 mt-4">
+        v{new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC
+      </div>
+      
       {/* Modal för detaljerad information */}
       <AnimatePresence>
         {modalOpen && modalData && (
