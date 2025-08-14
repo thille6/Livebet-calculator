@@ -570,6 +570,22 @@ const FootballPrediction = () => {
               <h3 className="font-medium text-purple-400 mb-2">Oavgjort</h3>
               <p className="text-sm text-gray-300">Jämna styrkeförhållanden, defensivt spel eller sen utjämning som begränsar tiden för fler mål.</p>
             </div>
+
+            {/* Nya scenarier */}
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-orange-400 mb-2">Favorit vinner med marginal</h3>
+              <p className="text-sm text-gray-300">Ett lag är tydligt starkare och kontrollerar matchbilden. Passar spel som -1 (handikapp) eller vinst med minst två mål.</p>
+            </div>
+
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-cyan-400 mb-2">Många hörnor</h3>
+              <p className="text-sm text-gray-300">Högt tryck och många inlägg/skott som styrs ut. Offensiva ytterzoner och flera fasta situationer.</p>
+            </div>
+
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <h3 className="font-medium text-pink-400 mb-2">Få kort</h3>
+              <p className="text-sm text-gray-300">Lågintensivt spel med färre dueller och avbrott. Domare med låg benägenhet att varna gynnar underspel på kort.</p>
+            </div>
           </div>
         </motion.div>
       </div>
