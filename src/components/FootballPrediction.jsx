@@ -5,6 +5,21 @@ import { Pie, Bar } from 'react-chartjs-2';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
+// Kalibreringskonstanter för faktorvikter och draw-boost
+const CAL = {
+  k_sot: 0.10,
+  k_soff: 0.04,
+  k_poss: 0.50, // påverkan relativt 50-50
+  k_corner: 0.03,
+  k_y: 0.06,   // guldkortspåverkan per kort (negativ på eget lag)
+  k_r: 0.35,   // rött kort starkare effekt
+  rho_draw: 0.05 // 0..0.2 typiskt; 0 betyder avstängd
+};
+
+// Hjälp-funktioner
+const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+const safeExp = (x) => Math.exp(clamp(x, -4, 4)); // begränsa exponenter
+
 const FootballPrediction = () => {
   const [formData, setFormData] = useState({
     homeTeam: '',
@@ -77,131 +92,200 @@ const FootballPrediction = () => {
   };
 
   const generatePredictions = () => {
-    const timeRemaining = (120 - formData.matchMinute) / 90;
-    const adjustmentFactor = Math.max(0.1, timeRemaining);
-    
+    // Korrigerad tidsfaktor: använd 90 minuter som bas, klampa till [0.05, 1]
+    const minute = clamp(formData.matchMinute || 0, 0, 120);
+    const timeRemaining = clamp((90 - minute) / 90, 0.05, 1);
+
+    // Bas-lambda före faktorer (kan senare göras parametrisk eller lag-specifik)
     let homeLambda = 1.4;
     let awayLambda = 1.2;
 
+    // Hemmafördel på basnivå (inte tidsberoende)
     if (formData.venue === 'home') {
       homeLambda *= 1.1;
     } else {
       awayLambda *= 1.1;
     }
 
-    const homeAttackStrength = (formData.homeShotsOnTarget + formData.homeShotsOffTarget * 0.3) * 0.15 +
-                               formData.homeCorners * 0.05 +
-                               (formData.homePossession / 100) * 0.5;
-    
-    const awayAttackStrength = (formData.awayShotsOnTarget + formData.awayShotsOffTarget * 0.3) * 0.15 +
-                               formData.awayCorners * 0.05 +
-                               (formData.awayPossession / 100) * 0.5;
+    // Separata faktorer som multipliceras in i λ
+    // 1) Possession (relativt 50/50)
+    const possDiffH = clamp((formData.homePossession || 50) - 50, -50, 50) / 50; // -1..1
+    const possDiffA = -possDiffH;
+    const f_poss_h = clamp(1 + CAL.k_poss * possDiffH, 0.5, 1.5);
+    const f_poss_a = clamp(1 + CAL.k_poss * possDiffA, 0.5, 1.5);
 
-    homeLambda += homeAttackStrength;
-    awayLambda += awayAttackStrength;
+    // 2) Skott på mål och 3) Skott utanför mål
+    const f_sot_h = clamp(1 + CAL.k_sot * (formData.homeShotsOnTarget || 0) - CAL.k_sot * 0.5 * (formData.awayShotsOnTarget || 0), 0.6, 2.0);
+    const f_sot_a = clamp(1 + CAL.k_sot * (formData.awayShotsOnTarget || 0) - CAL.k_sot * 0.5 * (formData.homeShotsOnTarget || 0), 0.6, 2.0);
 
-    if (formData.homeRedCards > 0) {
-      homeLambda *= Math.pow(0.8, formData.homeRedCards);
+    const f_soff_h = clamp(1 + CAL.k_soff * (formData.homeShotsOffTarget || 0), 0.7, 1.8);
+    const f_soff_a = clamp(1 + CAL.k_soff * (formData.awayShotsOffTarget || 0), 0.7, 1.8);
+
+    // 4) Hörnor
+    const f_corner_h = clamp(1 + CAL.k_corner * (formData.homeCorners || 0), 0.7, 1.8);
+    const f_corner_a = clamp(1 + CAL.k_corner * (formData.awayCorners || 0), 0.7, 1.8);
+
+    // 5) Kortfaktor (negativ för laget som har fått kort). Använd tidsviktning: när mindre tid kvar, större effekt per kort.
+    const timeWeight = clamp(1 + 1.5 * (1 - timeRemaining), 1, 2.5); // tidigare kort påverkar länge; sent i matchen förstärks påverkan
+    const f_card_h = clamp(
+      1 - (CAL.k_y * (formData.homeYellowCards || 0) + CAL.k_r * (formData.homeRedCards || 0)) * timeWeight,
+      0.3,
+      1.1
+    );
+    const f_card_a = clamp(
+      1 - (CAL.k_y * (formData.awayYellowCards || 0) + CAL.k_r * (formData.awayRedCards || 0)) * timeWeight,
+      0.3,
+      1.1
+    );
+
+    // 6) Match state-faktor: ledande lag tenderar att sänka egen måltakt, jagande lag öka. Skala av tid.
+    const goalDiff = (formData.homeGoals || 0) - (formData.awayGoals || 0);
+    const stateIntensity = 0.25 * (1 - timeRemaining); // starkare ju senare i matchen
+    let f_state_h = 1;
+    let f_state_a = 1;
+    if (goalDiff > 0) {
+      // Hemma leder
+      f_state_h = clamp(1 - stateIntensity * Math.min(goalDiff, 3), 0.6, 1.05);
+      f_state_a = clamp(1 + stateIntensity * Math.min(goalDiff, 3), 0.95, 1.6);
+    } else if (goalDiff < 0) {
+      // Borta leder
+      const gd = Math.min(-goalDiff, 3);
+      f_state_h = clamp(1 + stateIntensity * gd, 0.95, 1.6);
+      f_state_a = clamp(1 - stateIntensity * gd, 0.6, 1.05);
     }
-    if (formData.awayRedCards > 0) {
-      awayLambda *= Math.pow(0.8, formData.awayRedCards);
-    }
 
-    homeLambda *= adjustmentFactor;
-    awayLambda *= adjustmentFactor;
+    // Multiplicera in alla faktorer i respektive λ (ingen direkt tidsfaktor på λ)
+    homeLambda = homeLambda * f_poss_h * f_sot_h * f_soff_h * f_corner_h * f_card_h * f_state_h;
+    awayLambda = awayLambda * f_poss_a * f_sot_a * f_soff_a * f_corner_a * f_card_a * f_state_a;
 
+    // Säkra rimliga λ-intervall
+    homeLambda = clamp(homeLambda, 0.05, 6);
+    awayLambda = clamp(awayLambda, 0.05, 6);
+
+    // Bygg Poisson-fördelningar med dynamiskt målintervall tills täckning > 0.999 (min 0..6)
     const homeGoalProbs = [];
     const awayGoalProbs = [];
-    const totalGoalProbs = [];
 
-    for (let i = 0; i <= 4; i++) {
-      homeGoalProbs.push(i === 4 ? 
-        1 - homeGoalProbs.reduce((sum, prob) => sum + prob, 0) : 
-        poissonProbability(homeLambda, i)
-      );
-      awayGoalProbs.push(i === 4 ? 
-        1 - awayGoalProbs.reduce((sum, prob) => sum + prob, 0) : 
-        poissonProbability(awayLambda, i)
-      );
+    let maxK = 6;
+    const coverageTarget = 0.999;
+    const buildProbs = (lambda, probs) => {
+      probs.length = 0;
+      for (let k = 0; k <= maxK; k++) {
+        probs.push(poissonProbability(lambda, k));
+      }
+      let coverage = probs.reduce((s, p) => s + p, 0);
+      while (coverage < coverageTarget && maxK < 15) {
+        maxK += 1;
+        probs.push(poissonProbability(lambda, maxK));
+        coverage += probs[probs.length - 1];
+      }
+      // Om maxK ökade för ena laget behöver vi balansera för det andra senare
+      return coverage;
+    };
+
+    let covHome, covAway;
+    covHome = buildProbs(homeLambda, homeGoalProbs);
+    const savedMaxK = maxK;
+    covAway = buildProbs(awayLambda, awayGoalProbs);
+    // säkerställ samma längd
+    if (maxK !== savedMaxK) {
+      // bygg om home med nya maxK för konsistens
+      maxK = Math.max(maxK, savedMaxK);
+      homeGoalProbs.length = 0;
+      for (let k = 0; k <= maxK; k++) homeGoalProbs.push(poissonProbability(homeLambda, k));
     }
 
-    for (let i = 0; i <= 4; i++) {
-      let totalProb = 0;
-      for (let h = 0; h <= 4; h++) {
-        for (let a = 0; a <= 4; a++) {
-          if (h + a === i) {
-            totalProb += homeGoalProbs[h] * awayGoalProbs[a];
-          }
+    // Normalisera varje marginals sannolikheter (pga truncering)
+    const sumH = homeGoalProbs.reduce((s, p) => s + p, 0);
+    const sumA = awayGoalProbs.reduce((s, p) => s + p, 0);
+    for (let i = 0; i < homeGoalProbs.length; i++) homeGoalProbs[i] /= sumH;
+    for (let i = 0; i < awayGoalProbs.length; i++) awayGoalProbs[i] /= sumA;
+
+    // Bygg joint distribution (oberoende antagande initialt)
+    const joint = Array.from({ length: maxK + 1 }, () => Array(maxK + 1).fill(0));
+    for (let h = 0; h <= maxK; h++) {
+      for (let a = 0; a <= maxK; a++) {
+        joint[h][a] = homeGoalProbs[h] * awayGoalProbs[a];
+      }
+    }
+
+    // Valfri draw-boost på diagonalen, sedan renormalisera
+    if (CAL.rho_draw && CAL.rho_draw > 0) {
+      let sumJoint = 0;
+      for (let h = 0; h <= maxK; h++) {
+        for (let a = 0; a <= maxK; a++) {
+          let w = 1;
+          if (h === a) w += CAL.rho_draw; // boosta oavgjort
+          joint[h][a] *= w;
+          sumJoint += joint[h][a];
         }
       }
-      totalGoalProbs.push(totalProb);
-    }
-
-    let homeWin = 0;
-    let draw = 0;
-    let awayWin = 0;
-
-    for (let h = 0; h <= 4; h++) {
-      for (let a = 0; a <= 4; a++) {
-        const prob = homeGoalProbs[h] * awayGoalProbs[a];
-        const adjustedHomeGoals = h + formData.homeGoals;
-        const adjustedAwayGoals = a + formData.awayGoals;
-        
-        if (adjustedHomeGoals > adjustedAwayGoals) {
-          homeWin += prob;
-        } else if (adjustedHomeGoals === adjustedAwayGoals) {
-          draw += prob;
-        } else {
-          awayWin += prob;
+      for (let h = 0; h <= maxK; h++) {
+        for (let a = 0; a <= maxK; a++) {
+          joint[h][a] /= sumJoint;
         }
       }
     }
 
-    const total = homeWin + draw + awayWin;
-    homeWin /= total;
-    draw /= total;
-    awayWin /= total;
+    // Summera marginaler för total-mål distribution (0..maxK). Vid behov kan 4+ ersättas i UI
+    const totalGoalProbs = Array(maxK + 1).fill(0);
+    for (let t = 0; t <= maxK; t++) {
+      let tot = 0;
+      for (let h = 0; h <= maxK; h++) {
+        for (let a = 0; a <= maxK; a++) {
+          if (h + a === t) tot += joint[h][a];
+        }
+      }
+      totalGoalProbs[t] = tot;
+    }
 
+    // 1X2 beräkning från joint
+    let homeWin = 0, draw = 0, awayWin = 0;
+    for (let h = 0; h <= maxK; h++) {
+      for (let a = 0; a <= maxK; a++) {
+        const prob = joint[h][a];
+        const adjustedHomeGoals = h + (formData.homeGoals || 0);
+        const adjustedAwayGoals = a + (formData.awayGoals || 0);
+        if (adjustedHomeGoals > adjustedAwayGoals) homeWin += prob;
+        else if (adjustedHomeGoals === adjustedAwayGoals) draw += prob;
+        else awayWin += prob;
+      }
+    }
+    const total1x2 = homeWin + draw + awayWin || 1;
+    homeWin /= total1x2; draw /= total1x2; awayWin /= total1x2;
+
+    // Toppspecifika resultat (begränsa tabellstorlek för UI)
     const specificResults = [];
-    for (let h = 0; h <= 3; h++) {
-      for (let a = 0; a <= 3; a++) {
-        const prob = homeGoalProbs[h] * awayGoalProbs[a];
+    for (let h = 0; h <= Math.min(3, maxK); h++) {
+      for (let a = 0; a <= Math.min(3, maxK); a++) {
+        const prob = joint[h][a];
         specificResults.push({
-          result: `${h + formData.homeGoals}-${a + formData.awayGoals}`,
+          result: `${h + (formData.homeGoals || 0)}-${a + (formData.awayGoals || 0)}`,
           probability: prob,
-          homeGoals: h + formData.homeGoals,
-          awayGoals: a + formData.awayGoals
+          homeGoals: h + (formData.homeGoals || 0),
+          awayGoals: a + (formData.awayGoals || 0)
         });
       }
     }
-
     specificResults.sort((a, b) => b.probability - a.probability);
 
-    const over25Goals = totalGoalProbs[3] + totalGoalProbs[4];
+    // Över/Under 2.5 från totalGoalProbs
+    const over25Goals = totalGoalProbs.reduce((s, p, idx) => s + (idx >= 3 ? p : 0), 0);
     const under25Goals = 1 - over25Goals;
 
-    const totalCorners = formData.homeCorners + formData.awayCorners;
-    const remainingCornerRate = Math.max(2, 8 - totalCorners) * adjustmentFactor;
-    const over85Corners = remainingCornerRate > 1.5 ? 0.6 : 0.35;
+    // Hörnor och kort (behåll enkel heuristik men använd timeRemaining i hörn-proxy)
+    const totalCorners = (formData.homeCorners || 0) + (formData.awayCorners || 0);
+    const remainingCornerRate = Math.max(2, 8 - totalCorners) * clamp(1 + (1 - timeRemaining), 1, 2);
+    const over85Corners = remainingCornerRate > 2 ? 0.6 : 0.35;
 
-    const totalCards = formData.homeYellowCards + formData.awayYellowCards + 
-                      (formData.homeRedCards + formData.awayRedCards) * 2;
+    const totalCards = (formData.homeYellowCards || 0) + (formData.awayYellowCards || 0) +
+                      ((formData.homeRedCards || 0) + (formData.awayRedCards || 0)) * 2;
     const over45Cards = totalCards > 2 ? 0.7 : 0.4;
 
+    // Första mål: använd förhållande av λ
     const firstGoalHome = homeLambda / (homeLambda + awayLambda + 0.2);
     const firstGoalAway = awayLambda / (homeLambda + awayLambda + 0.2);
     const noMoreGoals = 0.2 / (homeLambda + awayLambda + 0.2);
-
-    const bettingTips = [];
-    if (over25Goals > 0.6) {
-      bettingTips.push("Över 2.5 mål ser troligt ut");
-    }
-    if (homeWin > 0.5) {
-      bettingTips.push(`${formData.homeTeam} har god chans att vinna`);
-    }
-    if (draw > 0.35) {
-      bettingTips.push("Oavgjort är ett starkt alternativ");
-    }
 
     const result = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -212,6 +296,20 @@ const FootballPrediction = () => {
           home: homeGoalProbs,
           away: awayGoalProbs,
           total: totalGoalProbs
+        },
+        meta: {
+          maxK,
+          lambdas: { homeLambda, awayLambda },
+          factors: {
+            f_poss: { home: f_poss_h, away: f_poss_a },
+            f_sot: { home: f_sot_h, away: f_sot_a },
+            f_soff: { home: f_soff_h, away: f_soff_a },
+            f_corner: { home: f_corner_h, away: f_corner_a },
+            f_card: { home: f_card_h, away: f_card_a },
+            f_state: { home: f_state_h, away: f_state_a },
+            timeRemaining,
+            rho_draw: CAL.rho_draw
+          }
         },
         overUnder: {
           goals: { over: over25Goals, under: under25Goals },
@@ -224,7 +322,7 @@ const FootballPrediction = () => {
           none: noMoreGoals
         },
         specificResults: specificResults.slice(0, 5),
-        bettingTips
+        bettingTips: []
       },
       timestamp: new Date().toLocaleString('sv-SE')
     };
@@ -657,7 +755,7 @@ const FootballPrediction = () => {
             >
               <Bar 
                 data={{
-                  labels: ['0', '1', '2', '3', '4+'],
+                  labels: Array.from({length: (predictions.results.meta?.maxK ?? 6) + 1}, (_, i) => i === (predictions.results.meta?.maxK ?? 6) ? `${i}` : `${i}`),
                   datasets: [
                     {
                       label: `${predictions.formData.homeTeam}`,
