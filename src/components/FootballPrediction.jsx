@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement } from 'chart.js';
 import { Pie, Bar, Scatter } from 'react-chartjs-2';
-import { calculatePredictions, CAL } from '../model/scoringModel';
+import { calculatePredictions } from '../model/scoringModel';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement);
 
@@ -12,8 +12,8 @@ const safeExp = (x) => Math.exp(clamp(x, -4, 4)); // begränsa exponenter
 
 const FootballPrediction = () => {
   const [formData, setFormData] = useState({
-    homeTeam: '',
-    awayTeam: '',
+    homeTeam: 'Hemmalag',
+    awayTeam: 'Bortalag',
     homePossession: 50,
     awayPossession: 50,
     homeShotsOnTarget: 0,
@@ -22,22 +22,24 @@ const FootballPrediction = () => {
     awayShotsOffTarget: 0,
     homeCorners: 0,
     awayCorners: 0,
+    homeGoals: 0,
+    awayGoals: 0,
     homeYellowCards: 0,
     awayYellowCards: 0,
     homeRedCards: 0,
     awayRedCards: 0,
-    homeGoals: 0,
-    awayGoals: 0,
-    matchMinute: 0,
+    matchMinute: 45,
     venue: 'home',
     modelMode: 'poisson'
   });
+  
+  const [debugMode, setDebugMode] = useState(false);
 
   const [predictions, setPredictions] = useState(null);
   const [history, setHistory] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalData, setModalData] = useState(null);
-  const [refIntensity, setRefIntensity] = useState(1.0);
+
 
   useEffect(() => {
     const savedHistory = localStorage.getItem('footballPredictionHistory');
@@ -83,12 +85,11 @@ const FootballPrediction = () => {
   };
 
   const generatePredictions = () => {
-    const baseResults = calculatePredictions(formData, refIntensity);
-    const results = { ...baseResults, bettingTips: [] };
+    const results = calculatePredictions({ ...formData, debugMode });
 
     const result = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      formData: { ...formData },
+      formData: { ...formData, debugMode },
       results,
       timestamp: new Date().toLocaleString('sv-SE')
     };
@@ -153,6 +154,11 @@ const FootballPrediction = () => {
           <h2 className="text-xl font-semibold mb-4">Matchdata</h2>
         
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Debug-läge */}
+            <div className="sm:col-span-2 flex items-center gap-2">
+              <input id="debugMode" type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
+              <label htmlFor="debugMode" className="text-sm">Debug-läge (visa interna faktorer och λ)</label>
+            </div>
             {/* Lagnamn */}
             <div>
               <label className="block text-sm font-medium mb-1">Hemmalag</label>
@@ -397,20 +403,7 @@ const FootballPrediction = () => {
               </select>
             </div>
 
-            {/* Domarintensitet */}
-            <div>
-              <label className="block text-sm font-medium mb-1">Domarintensitet ({refIntensity.toFixed(2)})</label>
-              <input
-                type="range"
-                min="0.5"
-                max="1.5"
-                step="0.05"
-                value={refIntensity}
-                onChange={(e) => setRefIntensity(parseFloat(e.target.value))}
-                className="w-full"
-              />
-              <p className="text-xs text-gray-400 mt-1">Påverkar kort/hörn-rate och kortpåverkan i målmodellen</p>
-            </div>
+
           </div>
           
           <button 
@@ -610,6 +603,14 @@ const FootballPrediction = () => {
                 <p className="text-xl">{(predictions.results.overUnder.goals.under * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">Över 3.5 mål <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Över 3.5 mål = sannolikheten att totalsumman mål är minst 4. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.overUnder.goals35.over * 100).toFixed(1)}%</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">Under 3.5 mål <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Under 3.5 mål = sannolikheten att totalsumman mål är högst 3. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.overUnder.goals35.under * 100).toFixed(1)}%</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
                 <p className="font-medium">Över 8.5 hörnor</p>
                 <p className="text-xl">{(predictions.results.overUnder.corners.over * 100).toFixed(1)}%</p>
               </div>
@@ -624,6 +625,38 @@ const FootballPrediction = () => {
               <div className="bg-gray-700 p-3 rounded">
                 <p className="font-medium">Under 4.5 kort</p>
                 <p className="text-xl">{(predictions.results.overUnder.cards.under * 100).toFixed(1)}%</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="mb-6">
+            <h3 className="text-lg font-medium mb-2">Double Chance</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">1X <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance 1X = hemmaseger eller oavgjort. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.doubleChance.dc_1x * 100).toFixed(1)}%</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">12 <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance 12 = hemmaseger eller bortaseger. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.doubleChance.dc_12 * 100).toFixed(1)}%</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">X2 <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance X2 = oavgjort eller bortaseger. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.doubleChance.dc_x2 * 100).toFixed(1)}%</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="mb-6">
+            <h3 className="text-lg font-medium mb-2">Draw No Bet</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">Hemma <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="DNB (Hemma) = P(1) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.drawNoBet.home * 100).toFixed(1)}%</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <p className="font-medium">Borta <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="DNB (Borta) = P(2) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad.">i</span></p>
+                <p className="text-xl">{(predictions.results.drawNoBet.away * 100).toFixed(1)}%</p>
               </div>
             </div>
           </div>
@@ -669,13 +702,111 @@ const FootballPrediction = () => {
             {predictions.results.bettingTips.length > 0 ? (
               <ul className="list-disc pl-5 space-y-1">
                 {predictions.results.bettingTips.map((tip, index) => (
-                  <li key={`${tip}-${index}`}>{tip}</li>
+                  <li key={`${tip}-${index}`}>
+                    {tip}
+                    <span
+                      className="ml-2 inline-block bg-gray-600 text-white text-[10px] rounded-full w-4 h-4 text-center align-middle"
+                      title="Tipset visas när Wilson-lägsta-gränsen för sannolikheten passerar tröskeln och marknadens intensitetsfilter (t.ex. sumLambda, hörnor/kort-guards) är uppfyllda."
+                    >i</span>
+                  </li>
                 ))}
               </ul>
             ) : (
               <p className="text-gray-400">Inga tydliga tips för denna match</p>
             )}
           </div>
+          
+          {/* Debug-panel (endast synlig om debugMode är aktiverat) */}
+          {predictions.formData.debugMode && (
+            <div className="mb-6 bg-gray-700 p-4 rounded-lg border border-gray-600">
+              <h3 className="text-lg font-medium mb-3 text-yellow-400">🔧 Debug-läge</h3>
+              
+              <div className="space-y-4">
+                {/* Lambda-värden */}
+                <div>
+                  <h4 className="font-medium text-purple-400 mb-2">λ-värden (Poisson-intensitet)</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div className="bg-gray-800 p-2 rounded">
+                      <span className="text-gray-400">{predictions.formData.homeTeam}:</span> {predictions.results.meta.lambdas.home.toFixed(3)}
+                    </div>
+                    <div className="bg-gray-800 p-2 rounded">
+                      <span className="text-gray-400">{predictions.formData.awayTeam}:</span> {predictions.results.meta.lambdas.away.toFixed(3)}
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Bidragsfaktorer */}
+                <div>
+                  <h4 className="font-medium text-blue-400 mb-2">Bidragsfaktorer</h4>
+                  <div className="space-y-2 text-sm">
+                    {Object.entries(predictions.results.meta.factors).map(([factor, values]) => {
+                      if (typeof values === 'object' && values.home !== undefined) {
+                        return (
+                          <div key={factor} className="grid grid-cols-3 gap-2">
+                            <div className="text-gray-400 capitalize">{factor.replace('_', ' ')}:</div>
+                            <div className="bg-gray-800 p-1 rounded text-center">{values.home.toFixed(3)}</div>
+                            <div className="bg-gray-800 p-1 rounded text-center">{values.away.toFixed(3)}</div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })}
+                  </div>
+                </div>
+                
+                {/* Tilläggsinformation */}
+                <div>
+                  <h4 className="font-medium text-green-400 mb-2">Modellparametrar</h4>
+                  <div className="space-y-1 text-sm">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-gray-800 p-2 rounded">
+                        <span className="text-gray-400">Återstående tid:</span> {predictions.results.meta.timeRemaining.toFixed(1)} min
+                      </div>
+                      <div className="bg-gray-800 p-2 rounded">
+                        <span className="text-gray-400">Förlängning:</span> {predictions.results.meta.isExtraTime ? 'Ja' : 'Nej'}
+                      </div>
+                      <div className="bg-gray-800 p-2 rounded">
+                        <span className="text-gray-400">Tempo-mod:</span> {predictions.results.meta.tempoMod.toFixed(3)}
+                      </div>
+                      <div className="bg-gray-800 p-2 rounded">
+                        <span className="text-gray-400">Dixon-Coles τ:</span> {predictions.results.meta.dixonColes.toFixed(3)}
+                      </div>
+                      <div className="bg-gray-800 p-2 rounded">
+                        <span className="text-gray-400">Kalibrering:</span> {String(predictions.results.meta.calibration)}
+                      </div>
+                    </div>
+                    
+                    {/* Förklaring: kalibrera fler marknader */}
+                    <div className="bg-gray-700 p-3 rounded text-xs text-gray-300 mt-3">
+                      <div className="font-semibold text-gray-200 mb-1">Kalibrera fler marknader</div>
+                      <p>
+                        Just nu kalibreras 1X2, Över/Under 2.5 mål och BTTS. Vill du lägga till fler marknader (t.ex. OU 3.5, Draw No Bet eller Double Chance)
+                        är det enkelt: lägg till motsvarande kurvor i calibration.json (fält: x och y i intervallet 0–1) och koppla in kalibreringen i modellen.
+                      </p>
+                      <ul className="list-disc list-inside mt-1 space-y-0.5">
+                        <li>OU 3.5: nycklar ou35_over, ou35_under</li>
+                        <li>Draw No Bet: nycklar dnb_home, dnb_away</li>
+                        <li>Double Chance: nycklar dc_1x, dc_12, dc_x2</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Förväntade events */}
+                <div>
+                  <h4 className="font-medium text-orange-400 mb-2">Förväntade events</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div className="bg-gray-800 p-2 rounded">
+                      <span className="text-gray-400">Hörnor:</span> {predictions.results.meta.expectedCorners.toFixed(2)}
+                    </div>
+                    <div className="bg-gray-800 p-2 rounded">
+                      <span className="text-gray-400">Kort:</span> {predictions.results.meta.expectedCards.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           
           <div className="flex space-x-4">
             <button 

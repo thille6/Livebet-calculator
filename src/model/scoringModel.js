@@ -18,17 +18,86 @@ export const CAL = {
   k_tempo: 0.15,   // tempo-mod slutminut/game management
   k_card_balance: 0.03, // motståndarkort positiv effekt
   
+  // Shrink-konstanter för robusthet
+  prior_shots: 10,     // antal shots för shrink mot 0.35 efficiency
+  prior_corners: 5,    // antal corners för shrink mot baslinje
+  prior_cards: 3,      // antal cards för shrink mot baslinje
+  max_factor_change: 0.3, // max ±30% per minut för stabilitet
+  
   // Fas-specifika λ-justeringar
   phase1_factor: 1.0,  // 0-90 min (normal)
   phase2_factor: 0.7,  // 90-120 min (extra time, lägre måltakt)
   
   // Domareffekter
-  ref_intensity: 1.0   // 0.5-1.5; påverkar kort och hörnor
+  ref_intensity: 1.0,  // 0.5-1.5; påverkar kort och hörnor
+
+  // Konfidensnivå för Wilson-intervall (default 95%)
+  confidence_z: 1.96
 };
 
 // Hjälpfunktioner
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const safeExp = (x) => Math.exp(clamp(x, -6, 6));
+
+// Kalibreringslageret - mappar råa sannolikheter till kalibrerade
+let calibrationCurves = null;
+
+const loadCalibrationCurves = async () => {
+  try {
+    // Försök läsa calibration.json från public/calibration.json
+    const response = await fetch('/calibration.json');
+    if (response.ok) {
+      calibrationCurves = await response.json();
+      // Om _config.confidence_z finns, uppdatera CAL.confidence_z
+      if (calibrationCurves && calibrationCurves._config && typeof calibrationCurves._config.confidence_z === 'number') {
+        CAL.confidence_z = calibrationCurves._config.confidence_z;
+        console.log('Satte confidence_z från calibration.json:', CAL.confidence_z);
+      }
+      console.log('Kalibreringskurvor laddade:', calibrationCurves);
+    } else {
+      console.log('Ingen calibration.json hittad - använder identity');
+      calibrationCurves = 'identity';
+    }
+  } catch (error) {
+    console.log('Fel vid läsning av kalibreringskurvor - använder identity:', error.message);
+    calibrationCurves = 'identity';
+  }
+};
+
+// Initiera kalibreringskurvor asynkront (ingen await behövs)
+loadCalibrationCurves();
+
+// Enkel linjär interpolation för kalibreringskurvor
+const interpolate = (x, xPoints, yPoints) => {
+  if (xPoints.length !== yPoints.length || xPoints.length === 0) return x;
+  
+  // Clamp till intervallet
+  if (x <= xPoints[0]) return yPoints[0];
+  if (x >= xPoints[xPoints.length - 1]) return yPoints[yPoints.length - 1];
+  
+  // Hitta intervall
+  for (let i = 0; i < xPoints.length - 1; i++) {
+    if (x >= xPoints[i] && x <= xPoints[i + 1]) {
+      const t = (x - xPoints[i]) / (xPoints[i + 1] - xPoints[i]);
+      return yPoints[i] + t * (yPoints[i + 1] - yPoints[i]);
+    }
+  }
+  return x; // fallback
+};
+
+// Applicera kalibrering på en sannolikhet
+const applyCalibartion = (rawProb, market) => {
+  if (!calibrationCurves || calibrationCurves === 'identity') {
+    return rawProb; // ingen kalibrering
+  }
+  
+  const curve = calibrationCurves[market];
+  if (!curve || !curve.x || !curve.y) {
+    return rawProb; // ingen kurva för denna marknad
+  }
+  
+  return clamp(interpolate(rawProb, curve.x, curve.y), 0, 1);
+};
 
 // Rekursiv Poisson för numerisk stabilitet
 const poissonRecursive = (lambda, maxK) => {
@@ -98,7 +167,7 @@ const calculateCardsModel = (formData, timeRemaining, refIntensity) => {
 };
 
 // Huvudmodell
-export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity) => {
+export const calculatePredictions = (formData) => {
   const minute = clamp(formData.matchMinute || 0, 0, 120);
   
   // Fas-hantering: 0-90 vs 90-120
@@ -134,25 +203,46 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
   const awaySoff = formData.awayShotsOffTarget || 0;
   
   // Skott-effektivitet: SOT/(SOT+SOFF)
-  const homeEfficiency = (homeSot + homeSoff) > 0 ? homeSot / (homeSot + homeSoff) : 0.35;
-  const awayEfficiency = (awaySot + awaySoff) > 0 ? awaySot / (awaySot + awaySoff) : 0.35;
+  const priorShots = CAL.prior_shots;
+  const homeShotsTotal = homeSot + homeSoff;
+  const awayShotsTotal = awaySot + awaySoff;
+  const homeEffRaw = homeShotsTotal > 0 ? homeSot / homeShotsTotal : 0.35;
+  const awayEffRaw = awayShotsTotal > 0 ? awaySot / awayShotsTotal : 0.35;
+  const homeEfficiency = (homeEffRaw * homeShotsTotal + 0.35 * priorShots) / (homeShotsTotal + priorShots);
+  const awayEfficiency = (awayEffRaw * awayShotsTotal + 0.35 * priorShots) / (awayShotsTotal + priorShots);
   
-  const effBonusH = clamp(1 + CAL.k_eff * (homeEfficiency - 0.35), 0.8, 1.4);
-  const effBonusA = clamp(1 + CAL.k_eff * (awayEfficiency - 0.35), 0.8, 1.4);
+  const effBonusH = clamp(1 + CAL.k_eff * (homeEfficiency - 0.35), 0.9, 1.2);
+  const effBonusA = clamp(1 + CAL.k_eff * (awayEfficiency - 0.35), 0.9, 1.2);
   
-  let f_sot_h = clamp(1 + CAL.k_sot * homeSot - CAL.k_sot * 0.5 * awaySot, 0.6, 2.0);
-  let f_sot_a = clamp(1 + CAL.k_sot * awaySot - CAL.k_sot * 0.5 * homeSot, 0.6, 2.0);
+  // Mjuk clip per minut på SOT-påverkan
+  const perMinuteCap = 1 + CAL.max_factor_change * (minute / 90);
+  let f_sot_h = clamp(1 + CAL.k_sot * homeSot - CAL.k_sot * 0.5 * awaySot, 1 / perMinuteCap, perMinuteCap);
+  let f_sot_a = clamp(1 + CAL.k_sot * awaySot - CAL.k_sot * 0.5 * homeSot, 1 / perMinuteCap, perMinuteCap);
   
   f_sot_h *= effBonusH;
   f_sot_a *= effBonusA;
   
   // 3) Skott utanför mål
-  const f_soff_h = clamp(1 + CAL.k_soff * homeSoff, 0.7, 1.8);
-  const f_soff_a = clamp(1 + CAL.k_soff * awaySoff, 0.7, 1.8);
+  const f_soff_h = clamp(1 + CAL.k_soff * homeSoff, 1 / perMinuteCap, perMinuteCap);
+  const f_soff_a = clamp(1 + CAL.k_soff * awaySoff, 1 / perMinuteCap, perMinuteCap);
   
-  // 4) Hörnor
-  const f_corner_h = clamp(1 + CAL.k_corner * (formData.homeCorners || 0), 0.7, 1.8);
-  const f_corner_a = clamp(1 + CAL.k_corner * (formData.awayCorners || 0), 0.7, 1.8);
+  // 4) Hörnor med förbättrad shrink
+  const homeCorners = formData.homeCorners || 0;
+  const awayCorners = formData.awayCorners || 0;
+  const totalCornersObs = homeCorners + awayCorners;
+  
+  // Shrink mot baslinje baserat på förfluten tid och observerade events
+  const cornerBaseline = 9; // typisk totala hörnor per match
+  const expectedCornersByTime = (cornerBaseline / 90) * minute;
+  const cornerShrink = CAL.prior_corners / (minute / 10 + CAL.prior_corners); // shrink minskar över tid
+  
+  // Justera individuella bidrag med shrink
+  const cornerRateAdj = (totalCornersObs + cornerShrink * expectedCornersByTime) / (minute + cornerShrink * minute / 10);
+  const homeCornerAdj = (homeCorners + cornerShrink * expectedCornersByTime * 0.5) / (minute / 10 + cornerShrink);
+  const awayCornerAdj = (awayCorners + cornerShrink * expectedCornersByTime * 0.5) / (minute / 10 + cornerShrink);
+  
+  const f_corner_h = clamp(1 + CAL.k_corner * homeCornerAdj, 1 / perMinuteCap, perMinuteCap);
+  const f_corner_a = clamp(1 + CAL.k_corner * awayCornerAdj, 1 / perMinuteCap, perMinuteCap);
   
   // 5) Förbättrade kortfaktorer med timing och balans
   const timeWeight = clamp(1 + 1.5 * (1 - timeRemaining), 1, 2.5);
@@ -166,13 +256,23 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
   const cardBalanceH = CAL.k_card_balance * ((formData.awayYellowCards || 0) + 2 * (formData.awayRedCards || 0));
   const cardBalanceA = CAL.k_card_balance * ((formData.homeYellowCards || 0) + 2 * (formData.homeRedCards || 0));
   
+  // Shrink för kort: tidigt i matchen dras effekten mot baseline
+  const cardBaselinePer90 = 4.5; // totala kort per match
+  const expectedCardsByTime = (cardBaselinePer90 / 90) * minute;
+  const totalCardsObs = (formData.homeYellowCards || 0) + (formData.awayYellowCards || 0) + 2 * ((formData.homeRedCards || 0) + (formData.awayRedCards || 0));
+  const cardShrink = CAL.prior_cards / (minute / 10 + CAL.prior_cards);
+  const cardsAdj = (totalCardsObs + cardShrink * expectedCardsByTime) / (minute / 10 + cardShrink);
+  
+  const homeYCAdj = ((formData.homeYellowCards || 0) + 0.5 * cardShrink * expectedCardsByTime) / (minute / 10 + cardShrink);
+  const awayYCAdj = ((formData.awayYellowCards || 0) + 0.5 * cardShrink * expectedCardsByTime) / (minute / 10 + cardShrink);
+  
   const f_card_h = clamp(
-    1 - (CAL.k_y * (formData.homeYellowCards || 0) + redEffectH) * timeWeight + cardBalanceH,
-    0.3, 1.2
+    1 - (CAL.k_y * homeYCAdj + redEffectH) * timeWeight + cardBalanceH,
+    1 / perMinuteCap, perMinuteCap
   );
   const f_card_a = clamp(
-    1 - (CAL.k_y * (formData.awayYellowCards || 0) + redEffectA) * timeWeight + cardBalanceA,
-    0.3, 1.2
+    1 - (CAL.k_y * awayYCAdj + redEffectA) * timeWeight + cardBalanceA,
+    1 / perMinuteCap, perMinuteCap
   );
   
   // 6) Förbättrad match state med tempo-mod
@@ -263,24 +363,29 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
     }
   }
   
-  // 1X2 från joint
-  let homeWin = 0, draw = 0, awayWin = 0;
+  // 1X2 från joint (råa sannolikheter)
+  let rawHomeWin = 0, rawDraw = 0, rawAwayWin = 0;
   for (let h = 0; h <= maxK; h++) {
     for (let a = 0; a <= maxK; a++) {
       const prob = joint[h][a];
       const adjustedH = h + (formData.homeGoals || 0);
       const adjustedA = a + (formData.awayGoals || 0);
       
-      if (adjustedH > adjustedA) homeWin += prob;
-      else if (adjustedH === adjustedA) draw += prob;
-      else awayWin += prob;
+      if (adjustedH > adjustedA) rawHomeWin += prob;
+      else if (adjustedH === adjustedA) rawDraw += prob;
+      else rawAwayWin += prob;
     }
   }
   
-  const total1x2 = homeWin + draw + awayWin || 1;
-  homeWin /= total1x2;
-  draw /= total1x2;
-  awayWin /= total1x2;
+  const total1x2 = rawHomeWin + rawDraw + rawAwayWin || 1;
+  rawHomeWin /= total1x2;
+  rawDraw /= total1x2;
+  rawAwayWin /= total1x2;
+  
+  // Kalibrera 1X2 med eventuella kurvor
+  const homeWin = applyCalibartion(rawHomeWin, '1_home');
+  const draw = applyCalibartion(rawDraw, '1_draw');
+  const awayWin = applyCalibartion(rawAwayWin, '1_away');
   
   // Specifika resultat (begränsat för UI)
   const specificResults = [];
@@ -297,16 +402,28 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
   }
   specificResults.sort((a, b) => b.probability - a.probability);
   
-  // Över/Under 2.5 mål
-  const over25Goals = totalGoalProbs.reduce((s, p, idx) => s + (idx >= 3 ? p : 0), 0);
-  const under25Goals = 1 - over25Goals;
+  // Över/Under 2.5 mål (råa)
+  const rawOver25Goals = totalGoalProbs.reduce((s, p, idx) => s + (idx >= 3 ? p : 0), 0);
+  const rawUnder25Goals = 1 - rawOver25Goals;
+  
+  // Kalibrera OU 2.5
+  const over25Goals = applyCalibartion(rawOver25Goals, 'ou25_over');
+  const under25Goals = applyCalibartion(rawUnder25Goals, 'ou25_under');
+  
+  // Över/Under 3.5 mål (råa)
+  const rawOver35Goals = totalGoalProbs.reduce((s, p, idx) => s + (idx >= 4 ? p : 0), 0);
+  const rawUnder35Goals = 1 - rawOver35Goals;
+  
+  // Kalibrera OU 3.5
+  const over35Goals = applyCalibartion(rawOver35Goals, 'ou35_over');
+  const under35Goals = applyCalibartion(rawUnder35Goals, 'ou35_under');
   
   // Separata modeller för hörnor och kort
-  const expectedCorners = calculateCornersModel(formData, timeRemaining, refIntensity);
+  const expectedCorners = calculateCornersModel(formData, timeRemaining, 1.0);
   const cornerProbs = poissonRecursive(expectedCorners, 15);
   const over85Corners = cornerProbs.slice(9).reduce((s, p) => s + p, 0); // 9+ hörnor
   
-  const expectedCards = calculateCardsModel(formData, timeRemaining, refIntensity);
+  const expectedCards = calculateCardsModel(formData, timeRemaining, 1.0);
   const cardProbs = poissonRecursive(expectedCards, 12);
   const over45Cards = cardProbs.slice(5).reduce((s, p) => s + p, 0); // 5+ kort
   
@@ -314,6 +431,88 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
   const firstGoalHome = homeLambda / (homeLambda + awayLambda + 0.2);
   const firstGoalAway = awayLambda / (homeLambda + awayLambda + 0.2);
   const noMoreGoals = 0.2 / (homeLambda + awayLambda + 0.2);
+
+  // Bettingtips-regler (enkla heuristiker baserade på sannolikheter)
+  const tips = [];
+  const addTip = (text, score) => tips.push({ text, score });
+
+  // Osäkerhetsintervall (Wilson score) och evidensvikt
+  const wilson = (p, n, z = CAL.confidence_z) => {
+    const nz = Math.max(10, n);
+    const z2 = z * z;
+    const denom = 1 + z2 / nz;
+    const center = p + z2 / (2 * nz);
+    const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * nz)) / nz);
+    const lower = clamp((center - margin) / denom, 0, 1);
+    const upper = clamp((center + margin) / denom, 0, 1);
+    return { lower, upper };
+  };
+  const N_main = 30 + 70 * (1 - timeRemaining); // mer säkerhet senare i matchen
+  const lb = (p, n = N_main) => wilson(p, n).lower;
+  const ub = (p, n = N_main) => wilson(p, n).upper;
+
+  // Event- och intensitets-trösklar för robustare tips
+  const sumLambda = homeLambda + awayLambda;
+  const cornersGuardOver = expectedCorners > 6;
+  const cornersGuardUnder = expectedCorners < 10;
+  const cardsGuardOver = expectedCards > 4;
+  const cardsGuardUnder = expectedCards < 5;
+
+  // 1X2
+  if (lb(homeWin) > 0.55) addTip(`1 (hemmaseger) ${Math.round(homeWin*100)}%`, homeWin);
+  if (lb(awayWin) > 0.55) addTip(`2 (bortaseger) ${Math.round(awayWin*100)}%`, awayWin);
+  if (minute >= 70 && lb(draw) > 0.50) addTip(`Live: X (oavgjort) ${Math.round(draw*100)}%`, draw);
+
+  // Över/Under 2.5
+  if (minute < 75 && sumLambda > 2.4 && lb(over25Goals) > 0.60) addTip(`Över 2.5 mål ${Math.round(over25Goals*100)}%`, over25Goals);
+  if (minute < 75 && sumLambda < 2.0 && lb(under25Goals) > 0.60) addTip(`Under 2.5 mål ${Math.round(under25Goals*100)}%`, under25Goals);
+  
+  // Över/Under 3.5
+  if (minute < 70 && sumLambda > 3.1 && lb(over35Goals) > 0.60) addTip(`Över 3.5 mål ${Math.round(over35Goals*100)}%`, over35Goals);
+  if (minute < 70 && sumLambda < 2.9 && lb(under35Goals) > 0.60) addTip(`Under 3.5 mål ${Math.round(under35Goals*100)}%`, under35Goals);
+  
+  // Double Chance
+  const dc1x = applyCalibartion(homeWin + draw, 'dc_1x');
+  const dc12 = applyCalibartion(homeWin + awayWin, 'dc_12');
+  const dcx2 = applyCalibartion(draw + awayWin, 'dc_x2');
+  if (lb(dc1x) > 0.70) addTip(`Double Chance 1X ${Math.round(dc1x*100)}%`, dc1x);
+  if (lb(dc12) > 0.70) addTip(`Double Chance 12 ${Math.round(dc12*100)}%`, dc12);
+  if (lb(dcx2) > 0.70) addTip(`Double Chance X2 ${Math.round(dcx2*100)}%`, dcx2);
+  
+  // Draw No Bet
+  const dnbHome = applyCalibartion(homeWin / (homeWin + awayWin || 1), 'dnb_home');
+  const dnbAway = applyCalibartion(awayWin / (homeWin + awayWin || 1), 'dnb_away');
+  if (minute < 80 && lb(dnbHome) > 0.65) addTip(`Draw No Bet (Hemma) ${Math.round(dnbHome*100)}%`, dnbHome);
+  if (minute < 80 && lb(dnbAway) > 0.65) addTip(`Draw No Bet (Borta) ${Math.round(dnbAway*100)}%`, dnbAway);
+
+  // BTTS
+  const pHome0 = homeGoalProbs[0] ?? 0;
+  const pAway0 = awayGoalProbs[0] ?? 0;
+  const p00 = joint[0] && joint[0][0] ? joint[0][0] : pHome0 * pAway0;
+  const rawBtts = 1 - pHome0 - pAway0 + p00;
+  const btts = applyCalibartion(rawBtts, 'btts_yes');
+  if (minute < 80 && sumLambda > 1.8 && lb(btts) > 0.60) addTip(`BTTS: Ja ${Math.round(btts*100)}%`, btts);
+  if (minute < 80 && sumLambda < 1.6 && lb(1 - btts) > 0.60) addTip(`BTTS: Nej ${Math.round((1-btts)*100)}%`, 1 - btts);
+
+  // Hörnor och kort
+  if (cornersGuardOver && lb(over85Corners) > 0.60) addTip(`Över 8.5 hörnor ${Math.round(over85Corners*100)}%`, over85Corners);
+  if (cornersGuardUnder && lb(1 - over85Corners) > 0.60) addTip(`Under 8.5 hörnor ${Math.round((1-over85Corners)*100)}%`, 1 - over85Corners);
+
+  if (cardsGuardOver && lb(over45Cards) > 0.60) addTip(`Över 4.5 kort ${Math.round(over45Cards*100)}%`, over45Cards);
+  if (cardsGuardUnder && lb(1 - over45Cards) > 0.60) addTip(`Under 4.5 kort ${Math.round((1-over45Cards)*100)}%`, 1 - over45Cards);
+
+  // Första målet
+  if (minute < 70 && lb(firstGoalHome) > 0.60) addTip(`Första målet: ${formData.homeTeam || 'Hemma'} (${Math.round(firstGoalHome*100)}%)`, firstGoalHome);
+  if (minute < 70 && lb(firstGoalAway) > 0.60) addTip(`Första målet: ${formData.awayTeam || 'Borta'} (${Math.round(firstGoalAway*100)}%)`, firstGoalAway);
+
+  // Specifikt resultat (endast om väldigt tydligt)
+  if (specificResults.length > 0 && specificResults[0].probability >= 0.12) {
+    addTip(`Korrekt resultat ${specificResults[0].result} (${Math.round(specificResults[0].probability*100)}%)`, specificResults[0].probability);
+  }
+
+  // Rangordna och begränsa antal tips
+  tips.sort((a, b) => b.score - a.score);
+  const bettingTips = tips.slice(0, 6).map(t => t.text);
   
   return {
     matchOutcome: { homeWin, draw, awayWin },
@@ -339,12 +538,23 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
         dixonColes: CAL.tau
       },
       expectedCorners,
-      expectedCards
+      expectedCards,
+      calibration: calibrationCurves ? (calibrationCurves === 'identity' ? 'identity' : 'loaded') : 'unloaded'
     },
     overUnder: {
       goals: { over: over25Goals, under: under25Goals },
+      goals35: { over: over35Goals, under: under35Goals },
       corners: { over: over85Corners, under: 1 - over85Corners },
       cards: { over: over45Cards, under: 1 - over45Cards }
+    },
+    doubleChance: {
+      dc_1x: applyCalibartion(homeWin + draw, 'dc_1x'),
+      dc_12: applyCalibartion(homeWin + awayWin, 'dc_12'),
+      dc_x2: applyCalibartion(draw + awayWin, 'dc_x2')
+    },
+    drawNoBet: {
+      home: applyCalibartion(homeWin / (homeWin + awayWin || 1), 'dnb_home'),
+      away: applyCalibartion(awayWin / (homeWin + awayWin || 1), 'dnb_away')
     },
     firstGoalScorer: {
       home: firstGoalHome,
@@ -352,6 +562,7 @@ export const calculatePredictions = (formData, refIntensity = CAL.ref_intensity)
       none: noMoreGoals
     },
     specificResults: specificResults.slice(0, 5),
-    joint: joint // för eventuell heatmap
+    joint: joint, // för eventuell heatmap
+    bettingTips
   };
 };
