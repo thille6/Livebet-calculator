@@ -43,9 +43,13 @@ const safeExp = (x) => Math.exp(clamp(x, -6, 6));
 let calibrationCurves = null;
 
 const loadCalibrationCurves = async () => {
-  const url = '/calibration.json';
+  // Respektera Vites BASE_URL så att det fungerar både lokalt och på GitHub Pages
+  const baseUrl = (typeof import !== 'undefined' && typeof import.meta !== 'undefined' && import.meta.env && typeof import.meta.env.BASE_URL === 'string')
+    ? import.meta.env.BASE_URL
+    : '/';
+  const url = `${baseUrl}calibration.json`;
   try {
-    // Försök läsa calibration.json från public/calibration.json
+    // Försök läsa calibration.json från public/
     const response = await fetch(url);
     if (response.ok) {
       calibrationCurves = await response.json();
