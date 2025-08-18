@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement } from 'chart.js';
 import { Pie, Bar, Scatter } from 'react-chartjs-2';
 import { calculatePredictions } from '../model/scoringModel';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement);
+
 
 // Hjälp-funktioner
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -603,11 +604,11 @@ const FootballPrediction = () => {
                 <p className="text-xl">{(predictions.results.overUnder.goals.under * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">Över 3.5 mål <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Över 3.5 mål = sannolikheten att totalsumman mål är minst 4. Kalibrerad.">i</span></p>
+                <p className="font-medium">Över 3.5 mål <InfoIcon text="Över 3.5 mål = sannolikheten att totalsumman mål är minst 4. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.overUnder.goals35.over * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">Under 3.5 mål <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Under 3.5 mål = sannolikheten att totalsumman mål är högst 3. Kalibrerad.">i</span></p>
+                <p className="font-medium">Under 3.5 mål <InfoIcon text="Under 3.5 mål = sannolikheten att totalsumman mål är högst 3. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.overUnder.goals35.under * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
@@ -633,15 +634,15 @@ const FootballPrediction = () => {
             <h3 className="text-lg font-medium mb-2">Double Chance</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">1X <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance 1X = hemmaseger eller oavgjort. Kalibrerad.">i</span></p>
+                <p className="font-medium">1X <InfoIcon text="Double Chance 1X = hemmaseger eller oavgjort. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.doubleChance.dc_1x * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">12 <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance 12 = hemmaseger eller bortaseger. Kalibrerad.">i</span></p>
+                <p className="font-medium">12 <InfoIcon text="Double Chance 12 = hemmaseger eller bortaseger. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.doubleChance.dc_12 * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">X2 <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="Double Chance X2 = oavgjort eller bortaseger. Kalibrerad.">i</span></p>
+                <p className="font-medium">X2 <InfoIcon text="Double Chance X2 = oavgjort eller bortaseger. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.doubleChance.dc_x2 * 100).toFixed(1)}%</p>
               </div>
             </div>
@@ -651,30 +652,30 @@ const FootballPrediction = () => {
             <h3 className="text-lg font-medium mb-2">Draw No Bet</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">Hemma <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="DNB (Hemma) = P(1) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad.">i</span></p>
+                <p className="font-medium">Hemma <InfoIcon text="DNB (Hemma) = P(1) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.drawNoBet.home * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">Borta <span className="ml-1 inline-block bg-gray-600 text-white text-xs rounded-full w-4 h-4 text-center" title="DNB (Borta) = P(2) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad.">i</span></p>
+                <p className="font-medium">Borta <InfoIcon text="DNB (Borta) = P(2) / (P(1)+P(2)) där oavgjort voidas. Kalibrerad." /></p>
                 <p className="text-xl">{(predictions.results.drawNoBet.away * 100).toFixed(1)}%</p>
               </div>
             </div>
           </div>
           
           <div className="mb-6">
-            <h3 className="text-lg font-medium mb-2">Första målgörare (lag)</h3>
+            <h3 className="text-lg font-medium mb-2">Nästa målgörare (lag)</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gray-700 p-3 rounded">
                 <p className="font-medium">{predictions.formData.homeTeam}</p>
-                <p className="text-xl">{(predictions.results.firstGoalScorer.home * 100).toFixed(1)}%</p>
+                <p className="text-xl">{(predictions.results.nextGoalScorer.home * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
                 <p className="font-medium">{predictions.formData.awayTeam}</p>
-                <p className="text-xl">{(predictions.results.firstGoalScorer.away * 100).toFixed(1)}%</p>
+                <p className="text-xl">{(predictions.results.nextGoalScorer.away * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-gray-700 p-3 rounded">
-                <p className="font-medium">Inget mål</p>
-                <p className="text-xl">{(predictions.results.firstGoalScorer.none * 100).toFixed(1)}%</p>
+                <p className="font-medium">Inget fler mål</p>
+                <p className="text-xl">{(predictions.results.nextGoalScorer.none * 100).toFixed(1)}%</p>
               </div>
             </div>
           </div>
@@ -704,10 +705,7 @@ const FootballPrediction = () => {
                 {predictions.results.bettingTips.map((tip, index) => (
                   <li key={`${tip}-${index}`}>
                     {tip}
-                    <span
-                      className="ml-2 inline-block bg-gray-600 text-white text-[10px] rounded-full w-4 h-4 text-center align-middle"
-                      title="Tipset visas när Wilson-lägsta-gränsen för sannolikheten passerar tröskeln och marknadens intensitetsfilter (t.ex. sumLambda, hörnor/kort-guards) är uppfyllda."
-                    >i</span>
+                    <InfoIcon text="Tipset visas när Wilson-lägsta-gränsen för sannolikheten passerar tröskeln och marknadens intensitetsfilter (t.ex. sumLambda, hörnor/kort-guards) är uppfyllda." />
                   </li>
                 ))}
               </ul>
@@ -972,3 +970,122 @@ const FootballPrediction = () => {
 };
 
 export default FootballPrediction;
+
+// InfoIcon-komponent för att visa tooltips (hover/focus/tap, utan title-attr) med smart positionering
+const InfoIcon = ({ text }) => {
+  const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState('bottom'); // 'bottom' | 'top'
+  const wrapperRef = useRef(null);
+  const btnRef = useRef(null);
+  const tipRef = useRef(null);
+
+  useEffect(() => {
+    const handleOutside = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('click', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('click', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const btn = btnRef.current;
+    const tip = tipRef.current;
+    if (!btn || !tip) return;
+    // Mät utrymme nedanför och ovanför
+    const btnRect = btn.getBoundingClientRect();
+    // Visa tillfälligt för att mäta höjd om behövs
+    const tipStyle = tip.style;
+    const prevVisibility = tipStyle.visibility;
+    const prevDisplay = tipStyle.display;
+    tipStyle.visibility = 'hidden';
+    tipStyle.display = 'block';
+    const tipHeight = tip.offsetHeight;
+    tipStyle.visibility = prevVisibility;
+    tipStyle.display = prevDisplay;
+
+    const spaceBelow = window.innerHeight - btnRect.bottom;
+    const spaceAbove = btnRect.top;
+    const offset = 10; // px
+    if (spaceBelow < tipHeight + offset && spaceAbove > tipHeight + offset) {
+      setPlacement('top');
+    } else {
+      setPlacement('bottom');
+    }
+  }, [open]);
+
+  const tooltipId = useRef(`tt-${Math.random().toString(36).slice(2, 9)}`).current;
+
+  return (
+    <span ref={wrapperRef} className="relative inline-block align-middle">
+      <button
+        ref={btnRef}
+        type="button"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={(e) => {
+          // Stäng om fokus lämnar wrappern
+          if (wrapperRef.current && !wrapperRef.current.contains(e.relatedTarget)) {
+            setOpen(false);
+          }
+        }}
+        onClick={() => setOpen((v) => !v)}
+        className="ml-1 inline-flex items-center justify-center bg-gray-600 text-white text-xs rounded-full w-4 h-4 cursor-help hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        aria-label="Mer information"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-describedby={open ? tooltipId : undefined}
+      >
+        i
+      </button>
+      {open && (
+        <div
+          ref={tipRef}
+          id={tooltipId}
+          role="tooltip"
+          className={
+            `absolute z-50 left-1/2 -translate-x-1/2 whitespace-normal max-w-xs w-56 ` +
+            `text-xs rounded px-2 py-1 shadow-lg border ` +
+            `transition-opacity transition-transform duration-150 ease-out ` +
+            `${placement === 'bottom' ? 'mt-2' : 'mb-2'}`
+          }
+          style={{
+            top: placement === 'bottom' ? 'calc(100% + 6px)' : 'auto',
+            bottom: placement === 'top' ? 'calc(100% + 6px)' : 'auto',
+            opacity: 1,
+            transform: 'translateX(-50%) translateY(0)'
+          }}
+        >
+          <div className={`relative bg-gray-900 text-white border-gray-700 rounded px-2 py-1`}>
+            {/* Pil */}
+            <span
+              className={
+                `absolute left-1/2 -translate-x-1/2 w-0 h-0 border-l-6 border-r-6 ` +
+                `${placement === 'bottom' ? 'border-b-0 -top-2' : 'border-t-0 -bottom-2'}`
+              }
+              style={{
+                borderLeft: '6px solid transparent',
+                borderRight: '6px solid transparent',
+                borderTop: placement === 'bottom' ? '0' : '6px solid #1f2937', // gray-800/900
+                borderBottom: placement === 'bottom' ? '6px solid #1f2937' : '0'
+              }}
+            />
+            {text}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+};

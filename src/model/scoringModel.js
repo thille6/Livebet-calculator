@@ -427,10 +427,7 @@ export const calculatePredictions = (formData) => {
   const cardProbs = poissonRecursive(expectedCards, 12);
   const over45Cards = cardProbs.slice(5).reduce((s, p) => s + p, 0); // 5+ kort
   
-  // Första mål
-  const firstGoalHome = homeLambda / (homeLambda + awayLambda + 0.2);
-  const firstGoalAway = awayLambda / (homeLambda + awayLambda + 0.2);
-  const noMoreGoals = 0.2 / (homeLambda + awayLambda + 0.2);
+  // Nästa mål-beräkning hanteras nedan baserat på nuvarande λ och återstående tid
 
   // Bettingtips-regler (enkla heuristiker baserade på sannolikheter)
   const tips = [];
@@ -502,8 +499,15 @@ export const calculatePredictions = (formData) => {
   if (cardsGuardUnder && lb(1 - over45Cards) > 0.60) addTip(`Under 4.5 kort ${Math.round((1-over45Cards)*100)}%`, 1 - over45Cards);
 
   // Första målet
-  if (minute < 70 && lb(firstGoalHome) > 0.60) addTip(`Första målet: ${formData.homeTeam || 'Hemma'} (${Math.round(firstGoalHome*100)}%)`, firstGoalHome);
-  if (minute < 70 && lb(firstGoalAway) > 0.60) addTip(`Första målet: ${formData.awayTeam || 'Borta'} (${Math.round(firstGoalAway*100)}%)`, firstGoalAway);
+  // Nästa mål (inkluderar redan gjorda mål via nuvarande λ)
+  const totalLambda = homeLambda + awayLambda;
+  const pNoMoreGoals = Math.exp(-totalLambda);
+  const pAtLeastOneMore = 1 - pNoMoreGoals;
+  const nextGoalHome = totalLambda > 0 ? pAtLeastOneMore * (homeLambda / totalLambda) : 0;
+  const nextGoalAway = totalLambda > 0 ? pAtLeastOneMore * (awayLambda / totalLambda) : 0;
+  
+  if (minute < 70 && lb(nextGoalHome) > 0.60) addTip(`Nästa mål: ${formData.homeTeam || 'Hemma'} (${Math.round(nextGoalHome*100)}%)`, nextGoalHome);
+  if (minute < 70 && lb(nextGoalAway) > 0.60) addTip(`Nästa mål: ${formData.awayTeam || 'Borta'} (${Math.round(nextGoalAway*100)}%)`, nextGoalAway);
 
   // Specifikt resultat (endast om väldigt tydligt)
   if (specificResults.length > 0 && specificResults[0].probability >= 0.12) {
@@ -556,10 +560,10 @@ export const calculatePredictions = (formData) => {
       home: applyCalibartion(homeWin / (homeWin + awayWin || 1), 'dnb_home'),
       away: applyCalibartion(awayWin / (homeWin + awayWin || 1), 'dnb_away')
     },
-    firstGoalScorer: {
-      home: firstGoalHome,
-      away: firstGoalAway,
-      none: noMoreGoals
+    nextGoalScorer: {
+      home: nextGoalHome,
+      away: nextGoalAway,
+      none: pNoMoreGoals
     },
     specificResults: specificResults.slice(0, 5),
     joint: joint, // för eventuell heatmap
