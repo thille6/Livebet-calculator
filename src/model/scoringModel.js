@@ -44,7 +44,7 @@ let calibrationCurves = null;
 
 const loadCalibrationCurves = async () => {
   // Respektera Vites BASE_URL så att det fungerar både lokalt och på GitHub Pages
-  const baseUrl = (typeof import !== 'undefined' && typeof import.meta !== 'undefined' && import.meta.env && typeof import.meta.env.BASE_URL === 'string')
+  const baseUrl = (typeof import.meta !== 'undefined' && import.meta.env && typeof import.meta.env.BASE_URL === 'string')
     ? import.meta.env.BASE_URL
     : '/';
   const url = `${baseUrl}calibration.json`;
