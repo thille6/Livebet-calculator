@@ -43,9 +43,10 @@ const safeExp = (x) => Math.exp(clamp(x, -6, 6));
 let calibrationCurves = null;
 
 const loadCalibrationCurves = async () => {
+  const url = '/calibration.json';
   try {
     // Försök läsa calibration.json från public/calibration.json
-    const response = await fetch('/calibration.json');
+    const response = await fetch(url);
     if (response.ok) {
       calibrationCurves = await response.json();
       // Om _config.confidence_z finns, uppdatera CAL.confidence_z
@@ -55,12 +56,29 @@ const loadCalibrationCurves = async () => {
       }
       console.log('Kalibreringskurvor laddade:', calibrationCurves);
     } else {
-      console.log('Ingen calibration.json hittad - använder identity');
+      console.warn(`calibration.json kunde inte laddas (status ${response.status}) – använder identity`);
       calibrationCurves = 'identity';
     }
   } catch (error) {
-    console.log('Fel vid läsning av kalibreringskurvor - använder identity:', error.message);
-    calibrationCurves = 'identity';
+    console.warn(`Fel vid läsning av ${url}: ${error?.message || error} – försöker igen…`);
+    // Enkel retry en gång
+    try {
+      const retry = await fetch(url);
+      if (retry.ok) {
+        calibrationCurves = await retry.json();
+        if (calibrationCurves && calibrationCurves._config && typeof calibrationCurves._config.confidence_z === 'number') {
+          CAL.confidence_z = calibrationCurves._config.confidence_z;
+          console.log('Satte confidence_z från calibration.json:', CAL.confidence_z);
+        }
+        console.log('Kalibreringskurvor laddade (retry):', calibrationCurves);
+      } else {
+        console.warn(`Retry misslyckades (status ${retry.status}) – använder identity`);
+        calibrationCurves = 'identity';
+      }
+    } catch (err2) {
+      console.warn('Retry fel – använder identity:', err2?.message || err2);
+      calibrationCurves = 'identity';
+    }
   }
 };
 
